@@ -1,175 +1,77 @@
-# flacenc-rs
+# Wavey FLAC
 
-[![Build Status](https://github.com/yotarok/flacenc-rs/workflows/Unittest/badge.svg)](https://github.com/yotarok/flacenc-rs/actions)
-[![Crate](https://img.shields.io/crates/v/flacenc.svg)](https://crates.io/crates/flacenc)
-[![Documentation](https://docs.rs/flacenc/badge.svg)](https://docs.rs/flacenc)
+Wavey FLAC is one pure-Rust project for fast FLAC encoding and decoding. It
+combines the performance-focused `flacenc-rs` encoder with the mature Claxon
+decoder behind one crate and one streaming API.
 
-This crate provides some basic modules for building application-customized FLAC
-(Free Lossless Audio Codec) encoder in your rust programs. The API provided by
-this crate currently supports the following use cases:
+The project currently provides:
 
-1. Performing FLAC encoding from custom input sources.
-1. Inspecting the encoded streams, enabling analysis and serialization of
-   encoder results.
-1. Decoding a FLAC bitstream (experimental).
-
-Importantly, this encoder is designed for hackability. Its portable and
-(relatively) clean code makes it easy to modify and adapt to your specific use
-cases.
-
-If you need a stand-alone FLAC encoder/ decoder, rather than an embeddable
-library, try our companion CLI tool, [`flacenc-bin`].
-
-For a detailed comparison of this encoder's characteristics against the
-[FLAC reference implementation](https://xiph.org/flac/download.html), please
-refer to the [auto-generated report].
-
-## Usage
-
-Add the following line to your `Cargo.toml`:
-
-```toml
-flacenc = "0.5.1"
-```
-
-This crate is intended to be, and primarily developed with
-[`portable_simd`](https://github.com/rust-lang/portable-simd), and the default
-configuration above uses "fake" implementation of `portable_simd` for making it
-possible to build within a stable toolchain. If you are okay with using a
-nightly toolchain, use this crate with the SIMD features as follows:
-
-```toml
-flacenc = { version = "0.5.1", features = ["simd-nightly"] }
-```
-
-The performance improvement with "simd-nightly" feature can be seen by comparing
-[benchmark report (nightly)] and [benchmark report (stable)].
-
-## Examples
-
-See also the source code of `flacenc-bin` sub-crate as an example implementation
-of a FLAC encoder.
-
-The simplest way to implement a FLAC encoder given the recorded samples in
-`&[i32]` is as follows:
+- incremental native-FLAC decoding from arbitrarily sized byte chunks;
+- frame-oriented 16-bit and 24-bit encoding for 1–8 channels;
+- raw FLAC frame encoding and decoding for packet transports;
+- metadata parsing, CRC validation, corruption limits, and exact round-trip
+  tests in the same crate;
+- a final `STREAMINFO` header for file or container backpatching.
 
 ```rust
-use flacenc::component::BitRepr;
-use flacenc::error::Verify;
+use wavey_flac::frame::{FlacFrameConfig, FlacProfile};
+use wavey_flac::stream::{Decoder, Encoder};
 
-let samples: &[i32] = &[0i32; 4096]; // replace this with real samples.
+let config = FlacFrameConfig::new(48_000, 2, 16, 128, FlacProfile::Balanced)?;
+let mut encoder = Encoder::new(config)?;
+let samples = vec![0_i32; 128 * 2];
+let mut encoded = Vec::new();
+encoder.encode_i32(&samples, &mut encoded)?;
 
-let (channels, bits_per_sample, sample_rate) = (2, 16, 44100);
-let config = flacenc::config::Encoder::default().into_verified().expect(
-  "Config data error."
-);
-let source = flacenc::source::MemSource::from_samples(
-    samples, channels, bits_per_sample, sample_rate);
-let flac_stream = flacenc::encode_with_fixed_block_size(
-    &config, source, config.block_size
-).expect("Encode failed.");
+// Native files begin with this marker. `encoded` begins with STREAMINFO.
+let mut file = b"fLaC".to_vec();
+file.extend_from_slice(&encoded);
 
-// `Stream` implements `BitRepr` so you can obtain the encoded stream via
-// `ByteSink` struct that implements `BitSink`.
-let mut sink = flacenc::bitsink::ByteSink::new();
-flac_stream.write(&mut sink);
-
-// Then, e.g. you can write it to a file.
-std::fs::write("/dev/null", sink.as_slice());
-
-// or you can write only a specific frame.
-let mut sink = flacenc::bitsink::ByteSink::new();
-flac_stream.frame(0).unwrap().write(&mut sink);
+let mut decoder = Decoder::new();
+let mut decoded = vec![0_i32; samples.len()];
+let written = decoder.decode_i32(&file, &mut decoded)?;
+assert_eq!(&decoded[..written], samples);
+# Ok::<(), wavey_flac::frame::FlacFrameError>(())
 ```
 
-`samples` here is an interleaved sequence, e.g. in the case of stereo inputs, it
-is a sequence like `[left[0], right[0], left[1], right[1], ...]` where `left[t]`
-and `right[t]` denote the `t`-th sample from the left and right channels,
-respectively. All samples are assumed to be in the range of
-`- 2.pow(bits_per_samples - 1) .. 2.pow(bits_per_samples - 1)`, i.e. if
-`bits_per_samples == 16`, `samples[t]` must be `-32768 <= samples[t] <= 32767`.
+For more than one frame, call `Encoder::finish()` and replace the metadata at
+the start of a seekable file with that finalized header. A non-seekable stream
+remains valid with unknown total samples and an unset MD5 digest.
 
-### Customizing Encoder Behaviors
+## Origins
 
-NOTE: Currently, `flacenc` is in its initial development stage
-([major version zero](https://semver.org/#spec-item-4)). Therefore, the API may
-change frequently. While in major-version-zero phase, we increment the minor
-version ("Y" of the version "x.Y.z") when there's a breaking API change.
+The Git graph preserves both source histories. Encoder work descends from
+[`yotarok/flacenc-rs`](https://github.com/yotarok/flacenc-rs); decoder work
+descends from [`ruuda/claxon`](https://github.com/ruuda/claxon). Both were
+Apache-2.0 projects. See [THIRD_PARTY.md](THIRD_PARTY.md) and the retained
+upstream documentation under [`docs/`](docs/).
 
-The current API provides several ways to control the encoding process. The
-possible customization can be categorized into three groups:
+## Validation
 
-1. Encoder algorithm customization by configuring [`config::Encoder`],
-1. Input enhancement by implementing [`source::Source`] trait,
-1. Add custom post-processing via structs in [`component`] submodule.
+```sh
+cargo test
+cargo test --no-default-features
+```
 
-## Feature Flags
+`simd-nightly` deliberately requires a nightly toolchain, so it is tested
+separately rather than through `--all-features` on stable Rust.
 
-`flacenc` has a few Cargo features that change the internal behaviors and APIs.
+The whole-file FFmpeg baseline is both a benchmark and a losslessness gate. It
+encodes with Wavey's balanced and maximum profiles plus FFmpeg level 5, decodes
+all three files with both implementations, and rejects any PCM byte mismatch:
 
-- `decode`: Enables decoder-related features such as bit-stream parsing, and
-  component to signal conversion. `flacenc` employs
-  [`nom`](https://crates.io/crates/nom) as a bitstream parser toolkit, and
-  enabling this feature adds dependency to it.
-- `experimental`: Enables experimental coding algorithms that are typically
-  slower. Due to its experimental nature, there's no documentation on how to
-  activate each algorithm. You may need to explore `flacenc::config` module or
-  source codes for better understanding.
-- `log`: (This feature is enabled by default) Enables logging so an application
-  program can handle the log by linking a log-handler crate (such as
-  [`env_logger`] crate.) Logging is not done in a performance critical part of
-  the code, so the computational cost due to this feature should be negligible.
-- `simd-nightly`: Activates `portable-simd` feature of a rust nightly toolchain
-  and use real SIMD processing instead of the fake one currently used by
-  default.
-- `mimalloc`: Enables [`mimalloc`](https://crates.io/crates/mimalloc) global
-  allocator. This can lead a performance improvement in `par`-mode.
-- `par`: (This feature is enabled by default) Enables multi-thread encoding in
-  `encode_with_fixed_block_size` function if `config` argument is properly
-  configured (when `par` is enabled the default configuration enables
-  multi-thread mode.). If you want to disable multi-thread mode and make the
-  dependency tree smaller, you may do that by `default-features = false`. `par`
-  adds dependency to
-  [`crossbeam-channel`](https://crates.io/crates/crossbeam-channel) crate.
-- `serde`: Makes FLAC component datatypes to be serializable/ deserializable.
-  This is convenient for analyzing FLAC streams.
+```sh
+scripts/bench-ffmpeg.sh path/to/input-24-bit.wav 5
+```
 
-In an example encoder `flacenc-bin`, all the features except for `simd-nightly`
-are enabled by default. `simd-nightly` is used in
-[the benchmarking script](run_reporter.sh).
+Set `FFMPEG` to select a non-default binary. Generated FLAC and PCM artifacts
+stay under the ignored `target/` directory. See the checked-in
+[Westside baseline](benchmarks/WESTSIDE_BASELINE.md) for the initial result and
+methodology.
 
-## MSRV policy
-
-The core functionality of `flacenc` (without any feature flags) is developed to
-work with the stable Rust version that was the latest as of one year prior to
-the date of the latest stable release.
-
-For example, as of October 15, 2025, the latest stable release is 1.90.0, which
-was released on September 18, 2025. Therefore, `flacenc` currently supports the
-latest stable compiler available as of Dec 5, 2024, which is 1.83.0.
-
-When changing the MSRV, we increment the minor version number. Since `flacenc`
-is still at ver-0, this corresponds to changing the `Z` component in `X.Y.Z`.
-To avoid unnecessary version bumps, the MSRV may be set to an older version than
-the one derived by the rule above.
-
-*The current MSRV is 1.83.0.*
-
-## Contributing
-
-See [`CONTRIBUTING.md`] for details.
+The broader acceptance gate is byte-exact decoding against libFLAC and FFmpeg
+across the upstream FLAC/FATE corpora.
 
 ## License
 
-Apache 2.0; see [`LICENSE`] for details.
-
-[auto-generated report]: https://github.com/yotarok/flacenc-rs/blob/main/report/report.nightly.md
-[benchmark report (nightly)]: https://github.com/yotarok/flacenc-rs/blob/main/report/report.nightly.md
-[benchmark report (stable)]: https://github.com/yotarok/flacenc-rs/blob/main/report/report.stable.md
-[`component`]: https://docs.rs/flacenc/latest/flacenc/component/index.html
-[`config::encoder`]: https://docs.rs/flacenc/latest/flacenc/config/struct.Encoder.html
-[`contributing.md`]: https://github.com/yotarok/flacenc-rs/blob/main/CONTRIBUTING.md
-[`env_logger`]: https://crates.io/crates/env_logger
-[`flacenc-bin`]: https://github.com/yotarok/flacenc-rs/blob/main/flacenc-bin/README.md
-[`license`]: https://github.com/yotarok/flacenc-rs/blob/main/LICENSE
-[`source::source`]: https://docs.rs/flacenc/latest/flacenc/source/trait.Source.html
+Apache-2.0. See [LICENSE](LICENSE) and [LICENSE-CLAXON](LICENSE-CLAXON).

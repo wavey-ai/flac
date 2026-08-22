@@ -18,14 +18,14 @@
 // mimic clippy. This file acts as a part of the crate when checked by clippy.
 // but it is outside of the crate when it is actually used by doctests.
 #[cfg(clippy)]
-use crate as flacenc;
+use crate as wavey_flac;
 
-use flacenc::component::Frame;
-use flacenc::component::FrameHeader;
-use flacenc::component::Stream;
-use flacenc::config;
-use flacenc::error::Verify;
-use flacenc::source::MemSource;
+use wavey_flac::component::Frame;
+use wavey_flac::component::FrameHeader;
+use wavey_flac::component::Stream;
+use wavey_flac::config;
+use wavey_flac::error::Verify;
+use wavey_flac::source::MemSource;
 
 /// Makes a `Stream` for doctest.
 pub fn make_example_stream(
@@ -37,7 +37,7 @@ pub fn make_example_stream(
     let signal = vec![0i32; signal_len * channels];
     let bits_per_sample = 16;
     let source = MemSource::from_samples(&signal, channels, bits_per_sample, sample_rate);
-    flacenc::encode_with_fixed_block_size(
+    wavey_flac::encode_with_fixed_block_size(
         &config::Encoder::default()
             .into_verified()
             .expect("config value error"),

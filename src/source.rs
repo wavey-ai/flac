@@ -52,7 +52,7 @@ pub trait Fill {
     /// [`FrameBuf`] implements `Fill`.
     ///
     /// ```
-    /// # use flacenc::source::{Fill, FrameBuf};
+    /// # use wavey_flac::source::{Fill, FrameBuf};
     /// let mut fb = FrameBuf::with_size(8, 1024).unwrap();
     /// fb.fill_interleaved(&[0i32; 8 * 1024]);
     /// ```
@@ -70,7 +70,7 @@ pub trait Fill {
     /// [`FrameBuf`] implements `Fill`.
     ///
     /// ```
-    /// # use flacenc::source::{Fill, FrameBuf};
+    /// # use wavey_flac::source::{Fill, FrameBuf};
     /// let mut fb = FrameBuf::with_size(2, 64).unwrap();
     /// // Note that `FrameBuf` (or `Fill` in general) accepts shorter inputs.
     /// fb.fill_le_bytes(&[0x12, 0x34, 0x54, 0x76, 0x56, 0x78, 0x10, 0x32], 2);
@@ -152,7 +152,7 @@ impl FrameBuf {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::FrameBuf;
+    /// # use wavey_flac::source::FrameBuf;
     /// let fb = FrameBuf::with_size(2, 1024).unwrap();
     /// assert_eq!(fb.size(), 1024);
     /// ```
@@ -176,7 +176,7 @@ impl FrameBuf {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::FrameBuf;
+    /// # use wavey_flac::source::FrameBuf;
     /// let fb = FrameBuf::with_size(2, 1024).unwrap();
     /// assert_eq!(fb.size(), 1024);
     /// ```
@@ -189,8 +189,8 @@ impl FrameBuf {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::Fill;
-    /// # use flacenc::source::FrameBuf;
+    /// # use wavey_flac::source::Fill;
+    /// # use wavey_flac::source::FrameBuf;
     /// let mut fb = FrameBuf::with_size(1, 1024).unwrap();
     /// fb.fill_interleaved(&[0, 1, 2, 3]);
     /// assert_eq!(fb.filled_size(), 4);
@@ -222,7 +222,7 @@ impl FrameBuf {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::FrameBuf;
+    /// # use wavey_flac::source::FrameBuf;
     /// let mut fb = FrameBuf::with_size(2, 1024).unwrap();
     /// assert_eq!(fb.size(), 1024);
     /// fb.resize(2048);
@@ -239,7 +239,7 @@ impl FrameBuf {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::FrameBuf;
+    /// # use wavey_flac::source::FrameBuf;
     /// let fb = FrameBuf::with_size(8, 1024).unwrap();
     /// assert_eq!(fb.channels(), 8);
     /// ```
@@ -322,7 +322,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::Context;
+    /// # use wavey_flac::source::Context;
     /// let ctx = Context::new(16, 2);
     /// assert!(ctx.current_frame_number().is_none());
     /// assert_eq!(ctx.total_samples(), 0);
@@ -353,7 +353,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::{Context, Fill};
+    /// # use wavey_flac::source::{Context, Fill};
     /// let mut ctx = Context::new(16, 2);
     /// assert!(ctx.current_frame_number().is_none());
     ///
@@ -371,7 +371,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::Context;
+    /// # use wavey_flac::source::Context;
     /// let ctx = Context::new(16, 2);
     /// let zero_md5 = [
     ///     0xD4, 0x1D, 0x8C, 0xD9, 0x8F, 0x00, 0xB2, 0x04,
@@ -391,7 +391,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::{Context, Fill};
+    /// # use wavey_flac::source::{Context, Fill};
     /// let mut ctx = Context::new(16, 2);
     ///
     /// ctx.fill_interleaved(&[0, -1, -2, 3]);
@@ -554,7 +554,7 @@ impl MemSource {
     /// # Examples
     ///
     /// ```
-    /// use flacenc::source::MemSource;
+    /// use wavey_flac::source::MemSource;
     ///
     /// let src = MemSource::from_samples(&[0, 0, 1, -1, 2, -2, 3, -3], 2, 16, 8000);
     /// assert_eq!(src.as_slice(), &[0, 0, 1, -1, 2, -2, 3, -3]);
@@ -579,7 +579,7 @@ impl MemSource {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::source::MemSource;
+    /// # use wavey_flac::source::MemSource;
     /// let src = MemSource::from_samples(&[0, 0, 1, -1, 2, -2, 3, -3], 2, 16, 8000);
     /// assert_eq!(src.as_slice(), &[0, 0, 1, -1, 2, -2, 3, -3]);
     /// ```

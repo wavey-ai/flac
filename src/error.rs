@@ -186,7 +186,7 @@ impl VerifyError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// let err = VerifyError::new("order", "must be non-negative");
     /// assert_eq!(
     ///     format!("{}", err),
@@ -204,7 +204,7 @@ impl VerifyError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// let err = VerifyError::new("order", "must be non-negative");
     /// let err = err.within("encoder");
     /// assert_eq!(
@@ -225,7 +225,7 @@ impl VerifyError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// let err = VerifyError::new("order", "must be non-negative");
     /// let err = err.within("encoder");
     /// assert_eq!(err.path(), "encoder.order");
@@ -289,8 +289,8 @@ pub trait Verify: Sized + seal_verify::Sealed {
     /// [`config::Prc`]: crate::config::Prc
     ///
     /// ```
-    /// # use flacenc::error::*;
-    /// # use flacenc::config::Prc;
+    /// # use wavey_flac::error::*;
+    /// # use wavey_flac::config::Prc;
     /// let mut prc = Prc::default();
     /// prc.max_parameter = 256;  // invalid setting
     /// assert!(prc.verify().is_err());
@@ -313,9 +313,9 @@ pub trait Verify: Sized + seal_verify::Sealed {
     /// [`config::Prc`]: crate::config::Prc
     ///
     /// ```
-    /// # use flacenc::error::*;
-    /// # use flacenc::config::Prc;
-    /// # use flacenc::constant::rice::MAX_RICE_PARAMETER;
+    /// # use wavey_flac::error::*;
+    /// # use wavey_flac::config::Prc;
+    /// # use wavey_flac::constant::rice::MAX_RICE_PARAMETER;
     /// let mut prc = Prc::default();
     /// fn do_something_with_prc_config(config: &Verified<Prc>) -> usize {
     ///     if config.max_parameter > MAX_RICE_PARAMETER {
@@ -365,9 +365,9 @@ pub trait Verify: Sized + seal_verify::Sealed {
     /// [`config::Prc`]: crate::config::Prc
     ///
     /// ```should_panic
-    /// # use flacenc::error::*;
-    /// # use flacenc::config::Prc;
-    /// # use flacenc::constant::rice::MAX_RICE_PARAMETER;
+    /// # use wavey_flac::error::*;
+    /// # use wavey_flac::config::Prc;
+    /// # use wavey_flac::constant::rice::MAX_RICE_PARAMETER;
     /// fn do_something_with_prc_config(config: &Verified<Prc>) -> usize {
     ///     if config.max_parameter > MAX_RICE_PARAMETER {
     ///         panic!();
@@ -508,7 +508,7 @@ impl SourceError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// let err = SourceError::by_reason(SourceErrorReason::Open);
     /// assert_eq!(
     ///     format!("{}", err),
@@ -527,7 +527,7 @@ impl SourceError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// let err = SourceError::from_unknown();
     /// assert_eq!(
     ///     format!("{}", err),
@@ -548,7 +548,7 @@ impl SourceError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// # use std::io;
     /// let err = SourceError::from_io_error(io::Error::new(io::ErrorKind::Other, "oh no!"));
     /// assert_eq!(
@@ -570,7 +570,7 @@ impl SourceError {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::error::*;
+    /// # use wavey_flac::error::*;
     /// let err = SourceError::by_reason(SourceErrorReason::Open);
     /// let err = err.set_path("missing.wav");
     /// assert_eq!(

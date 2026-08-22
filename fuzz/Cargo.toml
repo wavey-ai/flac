@@ -13,6 +13,7 @@ libfuzzer-sys = "0.4"
 rand = "0.8.5"
 
 [dependencies.flacenc]
+package = "wavey-flac"
 path = ".."
 features = ["__export_sigen", "decode"]
 

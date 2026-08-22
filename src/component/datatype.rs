@@ -79,7 +79,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let stream = Stream::new(16000, 1, 16).unwrap();
     /// assert_eq!(stream.stream_info().channels(), 1);
     /// ```
@@ -100,7 +100,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let stream_info = StreamInfo::new(16000, 1, 16).unwrap();
     /// let stream = Stream::with_stream_info(stream_info);
     /// assert_eq!(stream.stream_info().sample_rate(), 16000);
@@ -122,7 +122,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let stream = Stream::new(16000, 1, 24).unwrap();
     /// assert_eq!(stream.stream_info().bits_per_sample(), 24);
     /// ```
@@ -148,7 +148,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let mut stream = Stream::new(16000, 1, 24).unwrap();
     /// stream.stream_info_mut().set_total_samples(123456);
     /// assert_eq!(stream.stream_info().total_samples(), 123456);
@@ -170,7 +170,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -191,8 +191,8 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::component::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut stream = Stream::new(16000, 1, 24).unwrap();
     /// stream.add_metadata_block(
     ///     MetadataBlockData::new_unknown(2, &[0xFF]).unwrap()
@@ -220,7 +220,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -241,7 +241,7 @@ impl Stream {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -377,8 +377,8 @@ impl MetadataBlockData {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// use flacenc::bitsink::MemSink;
+    /// # use wavey_flac::component::*;
+    /// use wavey_flac::bitsink::MemSink;
     /// let metadata: MetadataBlockData = MetadataBlockData::new_unknown(
     ///     0x12, &[0x34, 0x56]
     /// ).expect("failed to construct unknown metadata.");
@@ -409,7 +409,7 @@ impl MetadataBlockData {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let stream_info = StreamInfo::new(16000, 1, 8).unwrap();
     /// let metadata: MetadataBlockData = stream_info.clone().into();
     /// assert_eq!(metadata.as_stream_info(), Some(&stream_info));
@@ -463,7 +463,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let info = StreamInfo::new(16000, 2, 16).unwrap();
     /// assert_eq!(info.max_frame_size(), 0);
     /// ```
@@ -495,7 +495,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -529,7 +529,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -553,7 +553,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let info = StreamInfo::new(16000, 2, 16).unwrap();
     ///
     /// assert_eq!(info.max_frame_size(), 0);
@@ -568,7 +568,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -590,7 +590,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let info = StreamInfo::new(16000, 2, 16).unwrap();
     ///
     /// assert_eq!(info.max_block_size(), 0);
@@ -605,7 +605,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let info = StreamInfo::new(16000, 2, 16).unwrap();
     /// assert_eq!(info.sample_rate(), 16000);
     /// ```
@@ -619,7 +619,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let info = StreamInfo::new(16000, 2, 16).unwrap();
     /// assert_eq!(info.channels(), 2);
     /// ```
@@ -633,7 +633,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let info = StreamInfo::new(16000, 2, 16).unwrap();
     /// assert_eq!(info.bits_per_sample(), 16);
     /// ```
@@ -647,7 +647,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -671,9 +671,9 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// # use flacenc::source::{Context, Fill};
-    /// # use flacenc::*;
+    /// # use wavey_flac::component::*;
+    /// # use wavey_flac::source::{Context, Fill};
+    /// # use wavey_flac::*;
     /// let mut ctx = Context::new(16, 2);
     /// let mut info = StreamInfo::new(16000, 2, 16).unwrap();
     /// ctx.fill_interleaved(&[0x0000_0FFFi32; 246]);
@@ -691,7 +691,7 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -725,9 +725,9 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// # use flacenc::*;
-    /// # use flacenc::source::{Context, Fill};
+    /// # use wavey_flac::component::*;
+    /// # use wavey_flac::*;
+    /// # use wavey_flac::source::{Context, Fill};
     /// let mut ctx = Context::new(16, 2);
     /// let mut info = StreamInfo::new(16000, 2, 16).unwrap();
     /// assert_eq!(info.md5_digest(), &[0x00u8; 16]);
@@ -749,8 +749,8 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// # use flacenc::*;
+    /// # use wavey_flac::component::*;
+    /// # use wavey_flac::*;
     /// let mut info = StreamInfo::new(16000, 2, 16).unwrap();
     /// info.set_block_sizes(128, 1024).unwrap();
     /// assert_eq!(info.min_block_size(), 128);
@@ -787,8 +787,8 @@ impl StreamInfo {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// # use flacenc::*;
+    /// # use wavey_flac::component::*;
+    /// # use wavey_flac::*;
     /// let mut info = StreamInfo::new(16000, 2, 16).unwrap();
     /// info.set_frame_sizes(128, 2048).unwrap();
     /// assert_eq!(info.min_frame_size(), 128);
@@ -857,7 +857,7 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let chs = ChannelAssignment::Independent(1);
     /// let header = FrameHeader::new(192, chs, 8, 44100, FrameOffset::Frame(0)).unwrap();
     /// let subframe = Constant::new(192, -1, 8).unwrap();
@@ -891,7 +891,7 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -924,7 +924,7 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -948,7 +948,7 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -969,7 +969,7 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -995,7 +995,7 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -1014,8 +1014,8 @@ impl Frame {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -1100,7 +1100,7 @@ impl ChannelAssignment {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// assert_eq!(
     ///     ChannelAssignment::from_tag(5),
     ///     Some(ChannelAssignment::Independent(6)),
@@ -1135,7 +1135,7 @@ impl ChannelAssignment {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let rs = ChannelAssignment::RightSide;
     /// // Ride-side coding stores the side signal in channel-0.
     /// assert_eq!(rs.bits_per_sample_offset(0), 1);
@@ -1584,8 +1584,8 @@ impl FrameHeader {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::component::*;
+    /// # use wavey_flac::bitsink::*;
     /// let header = FrameHeader::new(
     ///     192, ChannelAssignment::Independent(1), 8, 44100, FrameOffset::StartSample(123456)
     /// ).unwrap();
@@ -1639,8 +1639,8 @@ impl FrameHeader {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -1708,8 +1708,8 @@ impl FrameHeader {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -1741,7 +1741,7 @@ impl FrameHeader {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::component::*;
     /// let chs = ChannelAssignment::Independent(1);
     /// let header = FrameHeader::new(192, chs, 12, 44100, FrameOffset::Frame(0)).unwrap();
     /// assert_eq!(header.bits_per_sample().unwrap(), 12);
@@ -1756,8 +1756,8 @@ impl FrameHeader {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # #[path = "../doctest_helper.rs"]
     /// # mod doctest_helper;
     /// # use doctest_helper::*;
@@ -1833,8 +1833,8 @@ impl Constant {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let subframe = Constant::new(1024, 3, 16)?;
     /// let mut sink = ByteSink::new();
@@ -1908,8 +1908,8 @@ impl Verbatim {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let subframe = Verbatim::new(&[0xAB; 64], 16)?;
     /// let mut sink = ByteSink::new();
@@ -1980,8 +1980,8 @@ impl FixedLpc {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let residual = Residual::new(0, 64, 1, &[8], &[0; 64], &[0; 64])?; // zero
     /// let subframe = FixedLpc::new(&[0xCDi32], residual, 16)?;
@@ -2071,8 +2071,8 @@ impl Lpc {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let residual = Residual::new(0, 64, 1, &[8], &[0; 64], &[0; 64])?; // zero
     /// let p = QuantizedParameters::new(&[1], 1, 0, 7)?; // designed to be 16 bits
@@ -2186,8 +2186,8 @@ impl QuantizedParameters {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
-    /// # use flacenc::component::*;
+    /// # use wavey_flac::bitsink::*;
+    /// # use wavey_flac::component::*;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let p = QuantizedParameters::new(&[1], 1, 0, 7)?;
     /// assert_eq!(p.coefficient(0), Some(1));

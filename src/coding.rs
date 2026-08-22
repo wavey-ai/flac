@@ -555,11 +555,11 @@ fn encode_frame(
 /// # Examples
 ///
 /// ```
-/// # use flacenc::*;
-/// use flacenc::config;
-/// use flacenc::component::StreamInfo;
-/// use flacenc::error::Verify;
-/// use flacenc::source::{Context, FrameBuf, MemSource, Source};
+/// # use wavey_flac::*;
+/// use wavey_flac::config;
+/// use wavey_flac::component::StreamInfo;
+/// use wavey_flac::error::Verify;
+/// use wavey_flac::source::{Context, FrameBuf, MemSource, Source};
 ///
 /// let (signal_len, block_size, channels, sample_rate) = (32000, 160, 2, 16000);
 /// let signal = vec![0i32; signal_len * channels];
@@ -623,13 +623,13 @@ pub fn encode_fixed_size_frame(
 /// # Examples
 ///
 /// ```
-/// # use flacenc::*;
+/// # use wavey_flac::*;
 /// # #[path = "doctest_helper.rs"]
 /// # mod doctest_helper;
 /// # use doctest_helper::*;
-/// use flacenc::config;
-/// use flacenc::error::Verify;
-/// use flacenc::source::MemSource;
+/// use wavey_flac::config;
+/// use wavey_flac::error::Verify;
+/// use wavey_flac::source::MemSource;
 ///
 /// let (signal_len, block_size, channels, sample_rate) = (32000, 160, 2, 16000);
 /// let signal = vec![0i32; signal_len * channels];

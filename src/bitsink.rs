@@ -59,7 +59,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{ByteSink, BitSink};
+    /// use wavey_flac::bitsink::{ByteSink, BitSink};
     /// let mut sink = ByteSink::new();
     ///
     /// sink.write_lsbs(0xFFu8, 3);
@@ -82,7 +82,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// # use flacenc::bitsink::{ByteSink, BitSink};
+    /// # use wavey_flac::bitsink::{ByteSink, BitSink};
     /// let mut sink = ByteSink::new();
     ///
     /// sink.write_lsbs(0xFFu8, 3);
@@ -99,7 +99,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// # use flacenc::bitsink::{MemSink, BitSink};
+    /// # use wavey_flac::bitsink::{MemSink, BitSink};
     /// let mut sink = MemSink::<u64>::new();
     ///
     /// sink.write_lsbs(0xFFu8, 3);
@@ -131,7 +131,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{ByteSink, BitSink};
+    /// use wavey_flac::bitsink::{ByteSink, BitSink};
     ///
     /// let mut sink = ByteSink::new();
     /// sink.write_lsbs(0x0Fu8, 3);
@@ -152,7 +152,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{ByteSink, BitSink};
+    /// use wavey_flac::bitsink::{ByteSink, BitSink};
     ///
     /// let mut sink = ByteSink::new();
     /// sink.write_msbs(0xF0u8, 3);
@@ -172,7 +172,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{ByteSink, BitSink};
+    /// use wavey_flac::bitsink::{ByteSink, BitSink};
     ///
     /// let mut sink = ByteSink::new();
     /// sink.write_msbs(0xF0u8, 3);
@@ -194,7 +194,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{ByteSink, BitSink};
+    /// use wavey_flac::bitsink::{ByteSink, BitSink};
     ///
     /// let mut sink = ByteSink::new();
     /// sink.write_msbs(0xF0u8, 3);
@@ -229,7 +229,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{ByteSink, BitSink};
+    /// use wavey_flac::bitsink::{ByteSink, BitSink};
     ///
     /// let mut sink = ByteSink::new();
     /// sink.write_msbs(0xF0u8, 3);
@@ -242,7 +242,7 @@ pub trait BitSink: Sized {
     ///
     /// ```
     /// # fn main() -> Result<(), std::convert::Infallible> {
-    /// use flacenc::bitsink::{MemSink, BitSink};
+    /// use wavey_flac::bitsink::{MemSink, BitSink};
     /// let mut sink = MemSink::<u64>::new();
     /// sink.write_lsbs(1u16, 1);
     /// sink.write_zeros(65);
@@ -299,7 +299,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// let empty: [u8; 0] = [];
     /// assert_eq!(&empty, sink.as_slice());
@@ -316,7 +316,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::with_capacity(128);
     /// sink.write_lsbs(0x00FFu16, 10);
     /// assert!(sink.into_inner().capacity() > 128 / 8);
@@ -333,7 +333,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// sink.write_lsbs(0xAAAAAAAAu32, 14);
     /// assert_eq!(sink.to_bitstring(), "10101010_101010**");
@@ -350,7 +350,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// sink.write(0u64);
     /// sink.write_msbs(0u8, 6);
@@ -365,7 +365,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// assert!(sink.is_empty());
     /// sink.write_msbs(0u8, 6);
@@ -383,7 +383,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::with_capacity(1);
     /// sink.write_bytes_aligned(&[0u8; 128]);
     /// assert_eq!(sink.len(), 1024);
@@ -416,7 +416,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// sink.write_msbs(0x3456u16, 13);
     /// assert_eq!(sink.to_bitstring(), "00110100_01010***");
@@ -447,7 +447,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// sink.write_bytes_aligned(&[0xABu8; 4]);
     /// let v: Vec<u8> = sink.into_inner();
@@ -463,7 +463,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u8>::new();
     /// sink.write_msbs(0x3456u16, 13);
     /// assert_eq!(sink.as_slice(), &[0x34, 0x50]);
@@ -483,7 +483,7 @@ impl<S: Bits> MemSink<S> {
     /// # Examples
     ///
     /// ```
-    /// # use flacenc::bitsink::*;
+    /// # use wavey_flac::bitsink::*;
     /// let mut sink = MemSink::<u64>::new();
     /// sink.write_msbs(0xCAFE_FEED_BEEF_FACEu64, 47);
     /// let mut bytes = [0u8; 6];

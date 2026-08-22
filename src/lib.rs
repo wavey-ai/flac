@@ -129,10 +129,12 @@ pub(crate) mod coding;
 pub mod component;
 pub mod config;
 pub mod constant;
+pub mod decoder;
 pub mod error;
 #[cfg(not(feature = "simd-nightly"))]
 #[doc(hidden)]
 pub(crate) mod fakesimd;
+pub mod frame;
 pub(crate) mod lpc;
 #[cfg(feature = "par")]
 pub(crate) mod par;
@@ -142,6 +144,7 @@ pub(crate) mod rice;
 #[doc(hidden)]
 pub mod sigen;
 pub mod source;
+pub mod stream;
 
 #[cfg(test)]
 pub mod test_helper;

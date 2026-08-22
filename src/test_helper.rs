@@ -144,7 +144,7 @@ where
 
     let flac_path = file.into_temp_path();
 
-    let mut reader = claxon::FlacReader::open(&flac_path).unwrap();
+    let mut reader = crate::decoder::FlacReader::open(&flac_path).unwrap();
     let streaminfo = reader.streaminfo();
     assert_eq!(streaminfo.channels as usize, src.channels());
     assert_eq!(streaminfo.sample_rate as usize, src.sample_rate());
