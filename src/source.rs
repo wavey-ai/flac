@@ -21,6 +21,7 @@ use md5::Digest;
 
 use super::arrayutils::deinterleave;
 use super::arrayutils::find_min_and_max;
+use super::arrayutils::i32s_to_le_bytes;
 use super::arrayutils::le_bytes_to_i32s;
 use super::constant::MAX_BLOCK_SIZE;
 use super::constant::MAX_CHANNELS;
@@ -306,6 +307,7 @@ impl Fill for FrameBuf {
 #[derive(Clone)]
 pub struct Context {
     md5: md5::Md5,
+    sample_bytes: Vec<u8>,
     bytes_per_sample: usize,
     channels: usize,
     sample_count: usize,
@@ -335,6 +337,7 @@ impl Context {
         );
         Self {
             md5: md5::Md5::new(),
+            sample_bytes: Vec::new(),
             bytes_per_sample,
             channels,
             sample_count: 0,
@@ -408,9 +411,10 @@ impl Fill for Context {
         if interleaved.is_empty() {
             return Ok(());
         }
-        for v in interleaved {
-            self.md5.update(&v.to_le_bytes()[0..self.bytes_per_sample]);
-        }
+        self.sample_bytes
+            .resize(interleaved.len() * self.bytes_per_sample, 0);
+        i32s_to_le_bytes(interleaved, &mut self.sample_bytes, self.bytes_per_sample);
+        self.md5.update(&self.sample_bytes);
         self.sample_count += interleaved.len() / self.channels;
         self.frame_count += 1;
         Ok(())
