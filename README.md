@@ -70,7 +70,16 @@ stay under the ignored `target/` directory. See the checked-in
 methodology.
 
 The broader acceptance gate is byte-exact decoding against libFLAC and FFmpeg
-across the upstream FLAC/FATE corpora.
+across the upstream FLAC/FATE corpora, followed by deterministic randomized
+cross-encoding with Wavey, FFmpeg, and libFLAC:
+
+```sh
+scripts/test-corpora.sh /path/to/flac-test-files /path/to/fate-samples 24
+```
+
+This tests native FLAC. Ogg FLAC and Matroska FLAC remain the responsibility of
+the surrounding container layer. See [TODO.md](TODO.md) for the latest green
+counts, known scope limits, and performance handoff.
 
 ## License
 
