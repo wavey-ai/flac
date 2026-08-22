@@ -54,6 +54,27 @@ keeps compressed input identical.
 On the same FFmpeg level-5 file, Wavey's decoder is currently 1.61x slower.
 Across the two Wavey streams, it is 2.21–2.34x slower than FFmpeg.
 
+## First optimization pass
+
+Westside is a production-shaped performance fixture, not a source of codec
+special cases. Changes from this pass were accepted only when they apply to
+the FLAC format generally and preserve exact output. No decision depends on
+this file's LPC-order distribution, Rice-parameter range, stereo content, or
+signal characteristics.
+
+| Layer | Commit | General change | Validation |
+|---|---|---|---|
+| `flacenc-rs` fork | `ab2d6a1` | Reuse one PCM byte buffer and update the stream MD5 once per frame instead of once per sample. | The maximum-profile FLAC remained byte-identical: 40,168,395 bytes, SHA-256 `5007250bae0a11c18059e45071fbd01784f3a2532888ee7329b476ae3c8cc29c`. Alternating hot runs indicated roughly 5–10% lower encode time. |
+| Claxon fork | `58b984e` | Decode Rice2 remainders with the narrowest valid 8-, 16-, or 32-bit reader. | Parameters 0, 8, 9, 16, 17, and 30 are covered; the full FFmpeg level-5 stream decodes bit-exactly. |
+| Unified stream API | `b17a9a9` | Reuse decoded-frame storage and specialize whole-block copying without changing the codec algorithm. | Whole-file A/B medians improved 3.6–12.1% across Wavey balanced, Wavey maximum, and FFmpeg level-5 inputs; mono, stereo, 3-channel, and 8-channel paths are covered. |
+
+Absolute A/B times during this pass were affected by fanless-laptop thermal
+throttling, so only alternating or same-session relative deltas are reported.
+Every retained path passed the quality gate below. An LPC-order specialization,
+a Rice-search recurrence, a sample-range shortcut, and an alternative byte
+packing loop were measured and rejected rather than retained as fixture-tuned
+complexity.
+
 ## Quality gate
 
 All seven independently produced PCM paths contained exactly 56,339,874 bytes
