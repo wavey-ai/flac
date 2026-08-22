@@ -59,6 +59,9 @@ pub const MAX_BLOCK_SIZE: usize = 32767;
 /// Maximum number of channels.
 pub const MAX_CHANNELS: usize = 8;
 
+/// Maximum sample rate representable by a FLAC frame header.
+pub const MAX_SAMPLE_RATE: usize = 655_350;
+
 /// The max number of partitions used in entropy estimation algorithm.
 pub(crate) const MAX_ENTROPY_ESTIMATOR_PARTITIONS: usize = 64;
 

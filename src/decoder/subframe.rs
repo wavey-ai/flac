@@ -318,9 +318,7 @@ fn decode_rice_partition<R: ReadBytes>(input: &mut Bitstream<R>, buffer: &mut [i
 
     // All ones is an escape code that indicates unencoded binary.
     if rice_param == 0b1111 {
-        return Err(Error::Unsupported(
-            "unencoded binary is not yet implemented",
-        ));
+        return decode_unencoded_partition(input, buffer);
     }
 
     // About the decoding below: the first part of the sample is the quotient,
@@ -368,9 +366,7 @@ fn decode_rice2_partition<R: ReadBytes>(
 
     // All ones is an escape code that indicates unencoded binary.
     if rice_param == 0b11111 {
-        return Err(Error::Unsupported(
-            "unencoded binary is not yet implemented",
-        ));
+        return decode_unencoded_partition(input, buffer);
     }
 
     // Use the narrowest bit-reading primitive that can hold the remainder.
@@ -399,6 +395,73 @@ fn decode_rice2_partition<R: ReadBytes>(
     }
 
     Ok(())
+}
+
+/// Decode a Rice escape partition, whose residuals are stored directly as
+/// signed two's-complement integers of a shared width.
+fn decode_unencoded_partition<R: ReadBytes>(
+    input: &mut Bitstream<R>,
+    buffer: &mut [i32],
+) -> Result<()> {
+    let raw_bits = input.read_leq_u8(5)? as u32;
+    if raw_bits == 0 {
+        buffer.fill(0);
+    } else {
+        for sample in buffer.iter_mut() {
+            *sample = extend_sign_u32(input.read_leq_u32(raw_bits)?, raw_bits);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn verify_decode_escaped_rice_partitions() {
+    use super::input::BufferedReader;
+    use std::io;
+
+    fn push_bits(bits: &mut Vec<bool>, value: u32, width: u32) {
+        for bit in (0..width).rev() {
+            bits.push(value & (1 << bit) != 0);
+        }
+    }
+
+    for &rice2 in &[false, true] {
+        for &(raw_bits, ref values, expected) in &[
+            (0u32, vec![0u32, 0, 0, 0], [0i32, 0, 0, 0]),
+            (1, vec![0, 1, 0, 1], [0, -1, 0, -1]),
+            (5, vec![0, 15, 16, 31], [0, 15, -16, -1]),
+            (
+                31,
+                vec![0, 0x3fff_ffff, 0x4000_0000, 0x7fff_ffff],
+                [0, 0x3fff_ffff, -0x4000_0000, -1],
+            ),
+        ] {
+            let parameter_bits = if rice2 { 5 } else { 4 };
+            let mut bits = Vec::new();
+            push_bits(&mut bits, (1 << parameter_bits) - 1, parameter_bits);
+            push_bits(&mut bits, raw_bits, 5);
+            for &value in values {
+                push_bits(&mut bits, value, raw_bits);
+            }
+
+            let mut encoded = vec![0u8; (bits.len() + 7) / 8];
+            for (index, &bit) in bits.iter().enumerate() {
+                if bit {
+                    encoded[index / 8] |= 1 << (7 - index % 8);
+                }
+            }
+
+            let reader = BufferedReader::new(io::Cursor::new(encoded));
+            let mut input = Bitstream::new(reader);
+            let mut decoded = [99i32; 4];
+            if rice2 {
+                decode_rice2_partition(&mut input, &mut decoded).unwrap();
+            } else {
+                decode_rice_partition(&mut input, &mut decoded).unwrap();
+            }
+            assert_eq!(decoded, expected);
+        }
+    }
 }
 
 #[test]

@@ -19,6 +19,7 @@ use crate::constant::qlpc::MAX_PRECISION as MAX_LPC_PRECISION;
 use crate::constant::qlpc::MAX_SHIFT as MAX_LPC_SHIFT;
 use crate::constant::qlpc::MIN_SHIFT as MIN_LPC_SHIFT;
 use crate::constant::MAX_CHANNELS;
+use crate::constant::MAX_SAMPLE_RATE;
 use crate::error::verify_range;
 use crate::error::verify_true;
 use crate::error::Verify;
@@ -146,7 +147,7 @@ impl Verify for StreamInfo {
                 "must be smaller than `max_frame_size`"
             )?;
         }
-        verify_range!("sample_rate", self.sample_rate(), ..=96_000)?;
+        verify_range!("sample_rate", self.sample_rate(), 1..=MAX_SAMPLE_RATE)?;
         verify_range!("channels", self.channels(), 1..=8)?;
         verify_bps!("bits_per_sample", self.bits_per_sample())
     }

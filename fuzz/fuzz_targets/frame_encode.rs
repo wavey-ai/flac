@@ -168,7 +168,7 @@ impl<'a> Arbitrary<'a> for Input {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self, arbitrary::Error> {
         let channel_count = u.int_in_range(1usize..=constant::MAX_CHANNELS)?;
         let block_size = u.int_in_range(constant::MIN_BLOCK_SIZE..=constant::MAX_BLOCK_SIZE)?;
-        let sample_rate = u.int_in_range(1usize..=96_000)?;
+        let sample_rate = u.int_in_range(1usize..=constant::MAX_SAMPLE_RATE)?;
         let bits_per_sample = (u.int_in_range(2u8..=6u8)? * 4) as usize;
 
         let config = arbitrary_config(u, block_size)?;

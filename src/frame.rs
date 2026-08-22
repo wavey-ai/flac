@@ -20,7 +20,7 @@ use std::io::Cursor;
 const FLAC_MAX_CHANNELS: u16 = 8;
 const FLAC_MIN_BLOCK_SIZE: u32 = 32;
 const FLAC_MAX_BLOCK_SIZE: u32 = 65_535;
-const FLAC_MAX_SAMPLE_RATE: u32 = (1 << 20) - 1;
+const FLAC_MAX_SAMPLE_RATE: u32 = crate::constant::MAX_SAMPLE_RATE as u32;
 const MAX_PACKET_OVERHEAD_BYTES: usize = 4_096;
 const MAX_PACKET_EXPANSION_RATIO: usize = 8;
 

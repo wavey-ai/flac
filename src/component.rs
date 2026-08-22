@@ -108,6 +108,21 @@ mod tests {
     }
 
     #[test]
+    fn stream_info_accepts_the_flac_frame_sample_rate_range() {
+        for sample_rate in [
+            1,
+            96_001,
+            192_000,
+            384_000,
+            crate::constant::MAX_SAMPLE_RATE,
+        ] {
+            StreamInfo::new(sample_rate, 2, 16).unwrap();
+        }
+        StreamInfo::new(0, 2, 16).unwrap_err();
+        StreamInfo::new(crate::constant::MAX_SAMPLE_RATE + 1, 2, 16).unwrap_err();
+    }
+
+    #[test]
     fn frame_bitstream_precomputataion() -> Result<(), OutputError<MemSink<u64>>> {
         let stream_info = StreamInfo::new(44100, 2, 16).unwrap();
         let samples = sigen::Sine::new(128, 0.2)

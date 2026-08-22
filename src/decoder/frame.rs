@@ -206,7 +206,7 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
         0b1001 => sample_rate = Some(44_100),
         0b1010 => sample_rate = Some(48_000),
         0b1011 => sample_rate = Some(96_000),
-        0b1100 => read_8bit_sr = true,  // Read Hz from end of header.
+        0b1100 => read_8bit_sr = true,  // Read kHz from end of header.
         0b1101 => read_16bit_sr = true, // Read Hz from end of header.
         0b1110 => read_16bit_sr_ten = true, // Read tens of Hz from end of header.
         // 1111 is invalid to prevent sync-fooling.
@@ -280,8 +280,8 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
     }
 
     if read_8bit_sr {
-        let sr = (crc_input.read_u8())?;
-        sample_rate = Some(sr as u32);
+        let sr_khz = (crc_input.read_u8())?;
+        sample_rate = Some(sr_khz as u32 * 1_000);
     }
     if read_16bit_sr {
         let sr = (crc_input.read_be_u16())?;
@@ -317,6 +317,27 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
         bits_per_sample: bits_per_sample,
     };
     Ok(Some(frame_header))
+}
+
+#[test]
+fn frame_header_8bit_sample_rate_is_in_khz() {
+    use super::input::BufferedReader;
+    use std::io;
+
+    // Fixed blocking, 16-sample block, mono 16-bit PCM, frame zero, followed
+    // by the stored block size and the 8-bit sample-rate field.
+    let mut bytes = vec![0xff, 0xf8, 0x6c, 0x08, 0x00, 0x0f, 39];
+    let crc = {
+        let data = BufferedReader::new(io::Cursor::new(bytes.clone()));
+        let mut reader = Crc8Reader::new(data);
+        while reader.read_u8_or_eof().unwrap().is_some() {}
+        reader.crc()
+    };
+    bytes.push(crc);
+
+    let mut reader = BufferedReader::new(io::Cursor::new(bytes));
+    let header = read_frame_header_or_eof(&mut reader).unwrap().unwrap();
+    assert_eq!(header.sample_rate, Some(39_000));
 }
 
 /// Converts a buffer with left samples and a side channel in-place to left ++ right.
@@ -652,6 +673,32 @@ fn ensure_buffer_len(mut buffer: Vec<i32>, new_len: usize) -> Vec<i32> {
     buffer
 }
 
+fn resolve_bits_per_sample(frame: Option<u32>, stream: Option<u32>) -> Result<u32> {
+    match (frame, stream) {
+        (Some(frame), Some(stream)) if frame != stream => Err(Error::FormatError(
+            "frame bits per sample conflicts with STREAMINFO",
+        )),
+        (Some(frame), _) => Ok(frame),
+        (None, Some(stream)) => Ok(stream),
+        (None, None) => Err(Error::Unsupported(
+            "header without bits per sample info or STREAMINFO default",
+        )),
+    }
+}
+
+#[test]
+fn bits_per_sample_must_match_stream_info_when_both_are_present() {
+    assert_eq!(resolve_bits_per_sample(Some(16), Some(16)).unwrap(), 16);
+    assert_eq!(resolve_bits_per_sample(Some(24), None).unwrap(), 24);
+    assert_eq!(resolve_bits_per_sample(None, Some(20)).unwrap(), 20);
+    assert!(matches!(
+        resolve_bits_per_sample(Some(8), Some(16)),
+        Err(Error::FormatError(
+            "frame bits per sample conflicts with STREAMINFO"
+        ))
+    ));
+}
+
 #[test]
 fn ensure_buffer_len_returns_buffer_with_new_len() {
     for capacity in 0..10 {
@@ -730,12 +777,7 @@ impl<R: ReadBytes> FrameReader<R> {
         // correctness, we must be careful to overwrite each byte in the buffer.
         buffer = ensure_buffer_len(buffer, total_samples);
 
-        let bps = header
-            .bits_per_sample
-            .or(self.bits_per_sample)
-            .ok_or(Error::Unsupported(
-                "header without bits per sample info or STREAMINFO default",
-            ))?;
+        let bps = resolve_bits_per_sample(header.bits_per_sample, self.bits_per_sample)?;
 
         // The number of bits per sample must not exceed 32, for we decode into
         // an i32. TODO: Turn this into an error instead of panic? Or is it
