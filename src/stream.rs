@@ -125,6 +125,7 @@ enum StreamState {
 pub struct Decoder {
     input: Vec<u8>,
     input_start: usize,
+    frame_buffer: Vec<i32>,
     pending_samples: Vec<i32>,
     pending_start: usize,
     stream_info: Option<StreamInfo>,
@@ -143,6 +144,7 @@ impl Decoder {
         Self {
             input: Vec::new(),
             input_start: 0,
+            frame_buffer: Vec::new(),
             pending_samples: Vec::new(),
             pending_start: 0,
             stream_info: None,
@@ -185,6 +187,7 @@ impl Decoder {
                 break;
             };
             written += self.copy_block(&block, &mut output[written..]);
+            self.frame_buffer = block.into_buffer();
         }
         Ok(written)
     }
@@ -234,6 +237,7 @@ impl Decoder {
     pub fn reset(&mut self) {
         self.input.clear();
         self.input_start = 0;
+        self.frame_buffer.clear();
         self.pending_samples.clear();
         self.pending_start = 0;
         self.stream_info = None;
@@ -416,13 +420,14 @@ impl Decoder {
         let stream_info = self.stream_info.ok_or_else(|| {
             FlacFrameError::Decode("FLAC stream has no STREAMINFO block".to_string())
         })?;
+        let frame_buffer = std::mem::take(&mut self.frame_buffer);
         let cursor = Cursor::new(self.available_input());
         let mut reader = FrameReader::with_stream_info(
             cursor,
             stream_info.sample_rate,
             stream_info.bits_per_sample,
         );
-        let block = match reader.read_next_or_eof(Block::empty().into_buffer()) {
+        let block = match reader.read_next_or_eof(frame_buffer) {
             Ok(Some(block)) => block,
             Ok(None) => return Ok(None),
             Err(DecodeError::IoError(error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
@@ -457,6 +462,35 @@ impl Decoder {
     fn copy_block(&mut self, block: &Block, output: &mut [i32]) -> usize {
         let sample_count = block.duration() as usize * block.channels() as usize;
         let written = sample_count.min(output.len());
+
+        // Whole blocks are the normal streaming case. Specialize mono and
+        // stereo so the compiler can eliminate repeated channel arithmetic,
+        // bounds checks, and the per-sample pending-output branch.
+        if output.len() >= sample_count {
+            match block.channels() {
+                1 => output[..sample_count].copy_from_slice(block.channel(0)),
+                2 => {
+                    for (target, (left, right)) in output[..sample_count]
+                        .chunks_exact_mut(2)
+                        .zip(block.stereo_samples())
+                    {
+                        target[0] = left;
+                        target[1] = right;
+                    }
+                }
+                _ => {
+                    let channels = block.channels();
+                    for frame in 0..block.duration() {
+                        for channel in 0..channels {
+                            output[frame as usize * channels as usize + channel as usize] =
+                                block.sample(channel, frame);
+                        }
+                    }
+                }
+            }
+            return sample_count;
+        }
+
         self.pending_samples.reserve(sample_count - written);
         let mut index = 0;
         for frame in 0..block.duration() {
@@ -523,6 +557,27 @@ mod tests {
         assert_eq!(decoder.stream_info().unwrap().channels, 2);
         assert_eq!(decoded, samples);
         decoder.finish().unwrap();
+    }
+
+    #[test]
+    fn whole_block_copy_handles_mono_and_multichannel_streams() {
+        for channels in [1_u16, 3, 8] {
+            let config =
+                FlacFrameConfig::new(48_000, channels, 16, 128, FlacProfile::Balanced).unwrap();
+            let samples: Vec<_> = (0..channels as usize * 384)
+                .map(|index| ((index as i32 * 977) % 65_536) - 32_768)
+                .collect();
+            let file = encode_file(config, &samples);
+            let mut decoder = Decoder::new();
+            let mut decoded = vec![0_i32; samples.len()];
+
+            assert_eq!(
+                decoder.decode_i32(&file, &mut decoded).unwrap(),
+                samples.len()
+            );
+            assert_eq!(decoded, samples);
+            decoder.finish().unwrap();
+        }
     }
 
     #[test]
