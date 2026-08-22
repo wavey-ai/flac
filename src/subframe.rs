@@ -350,11 +350,10 @@ fn decode_rice_partition<R: ReadBytes>(input: &mut Bitstream<R>,
     Ok(())
 }
 
-// Performance note: a Rice2 partition is extremely uncommon, I haven’t seen a
-// single one in any real-world FLAC file. So do not inline it, in order not to
-// pollute the caller with dead code.
+// Keep this out of line so the larger three-way remainder-width dispatch does
+// not bloat the residual decoder. Rice2 was historically rare, but current
+// FFmpeg versions emit it for high-resolution input, so it is not a cold path.
 #[inline(never)]
-#[cold]
 fn decode_rice2_partition<R: ReadBytes>(input: &mut Bitstream<R>,
                                         buffer: &mut [i32])
                                         -> Result<()> {
@@ -366,17 +365,76 @@ fn decode_rice2_partition<R: ReadBytes>(input: &mut Bitstream<R>,
         return Err(Error::Unsupported("unencoded binary is not yet implemented"))
     }
 
-    for sample in buffer.iter_mut() {
-        // First part of the sample is the quotient, unary encoded.
-        let q = try!(input.read_unary());
-
-        // Next is the remainder, in rice_param bits. Because at this
-        // point rice_param is at most 30, we can safely read into a u32.
-        let r = try!(input.read_leq_u32(rice_param));
-        *sample = rice_to_signed((q << rice_param) | r);
+    // Use the narrowest bit-reading primitive that can hold the remainder.
+    // Besides doing less work, this keeps the common <= 16-bit path free from
+    // the branches in the fully general u32 reader. Rice2 is emitted by
+    // current FFmpeg encoders for high-resolution input, so it is no longer
+    // safe to assume this path is irrelevant in practice.
+    if rice_param <= 8 {
+        for sample in buffer.iter_mut() {
+            let q = try!(input.read_unary());
+            let r = try!(input.read_leq_u8(rice_param)) as u32;
+            *sample = rice_to_signed((q << rice_param) | r);
+        }
+    } else if rice_param <= 16 {
+        for sample in buffer.iter_mut() {
+            let q = try!(input.read_unary());
+            let r = try!(input.read_gt_u8_leq_u16(rice_param));
+            *sample = rice_to_signed((q << rice_param) | r);
+        }
+    } else {
+        for sample in buffer.iter_mut() {
+            let q = try!(input.read_unary());
+            let r = try!(input.read_leq_u32(rice_param));
+            *sample = rice_to_signed((q << rice_param) | r);
+        }
     }
 
     Ok(())
+}
+
+#[test]
+fn verify_decode_rice2_partition_across_reader_widths() {
+    use std::io;
+    use input::BufferedReader;
+
+    for &rice_param in &[0u32, 8, 9, 16, 17, 30] {
+        let unsigned = [0u32, 1, 2, (1u32 << rice_param) | 3];
+        let mut bits = Vec::new();
+
+        for bit in (0..5).rev() {
+            bits.push(rice_param & (1 << bit) != 0);
+        }
+        for &value in &unsigned {
+            let quotient = value >> rice_param;
+            for _ in 0..quotient {
+                bits.push(false);
+            }
+            bits.push(true);
+            for bit in (0..rice_param).rev() {
+                bits.push(value & (1 << bit) != 0);
+            }
+        }
+
+        let mut encoded = vec![0u8; (bits.len() + 7) / 8];
+        for (index, &bit) in bits.iter().enumerate() {
+            if bit {
+                encoded[index / 8] |= 1 << (7 - index % 8);
+            }
+        }
+
+        let reader = BufferedReader::new(io::Cursor::new(encoded));
+        let mut input = Bitstream::new(reader);
+        let mut decoded = [0i32; 4];
+        decode_rice2_partition(&mut input, &mut decoded).unwrap();
+
+        assert_eq!(decoded, [
+            rice_to_signed(unsigned[0]),
+            rice_to_signed(unsigned[1]),
+            rice_to_signed(unsigned[2]),
+            rice_to_signed(unsigned[3]),
+        ]);
+    }
 }
 
 fn decode_constant<R: ReadBytes>(input: &mut Bitstream<R>,
