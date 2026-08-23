@@ -895,15 +895,25 @@ fn eof_error() -> io::Error {
 /// Resolved once per process so the per-symbol fast path never scans the
 /// environment.
 ///
-/// The plain Rice read measures faster than the fused form on current
-/// Apple silicon under LLVM, so it is the default. Setting
-/// `WAVEY_FLAC_RICE_FUSED=1` selects the fused single-lookup read instead,
-/// mirroring FFmpeg's Golomb decoder; the knob exists so the comparison can
-/// be repeated as compilers and CPUs change.
+/// Which Rice read is fastest depends on the microarchitecture. The fused
+/// single-lookup read wins on the x86-64 hardware we measure (one
+/// leading-zero count resolves quotient and remainder together); the plain
+/// two-step read wins on Apple silicon under LLVM. Setting
+/// `WAVEY_FLAC_RICE_FUSED=1` or `=0` overrides the default either way, so
+/// the comparison can be repeated as compilers and CPUs change.
 fn fused_rice_selected() -> bool {
     use std::sync::OnceLock;
+
+    #[cfg(target_arch = "x86_64")]
+    let arch_default = true;
+    #[cfg(not(target_arch = "x86_64"))]
+    let arch_default = false;
+
     static FUSED: OnceLock<bool> = OnceLock::new();
-    *FUSED.get_or_init(|| std::env::var_os("WAVEY_FLAC_RICE_FUSED").is_some())
+    *FUSED.get_or_init(|| match std::env::var_os("WAVEY_FLAC_RICE_FUSED") {
+        Some(value) => value != "0",
+        None => arch_default,
+    })
 }
 
 /// The default Rice read: unary quotient, then the remainder in one go.

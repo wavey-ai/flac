@@ -619,66 +619,53 @@ fn predict_lpc_low_order(raw_coefficients: &[i16], qlp_shift: i16, buffer: &mut 
         "Right-shift by negative value is not allowed."
     );
     debug_assert!(qlp_shift < 64, "Cannot shift by more than integer width.");
-    // The decoded residuals are 25 bits at most (assuming subset FLAC of at
-    // most 24 bits per sample, but there is the delta encoding for channels).
-    // The coefficients are 16 bits at most, so their product is 41 bits. In
-    // practice the predictor order does not exceed 12, so adding 12 numbers of
-    // 41 bits each requires at most 53 bits. Therefore, do all intermediate
-    // computations as i64.
+    debug_assert!(
+        raw_coefficients.len() <= 12,
+        "predict_lpc_low_order called with order > 12",
+    );
 
-    // In the code below, a predictor order of 12 is assumed. This aids
-    // optimization and vectorization by making some counts available at compile
-    // time. If the actual order is less than 12, simply set the early
-    // coefficients to 0.
+    // The inner reduction keeps a runtime trip count on purpose. With a
+    // compile-time constant order the optimizer unrolls the tap loop and then
+    // fuses the exposed product tree into vector code; the horizontal combine
+    // of that vector lands exactly on this loop's serial output dependency and
+    // costs far more than the multiplies it saves. A runtime bound keeps one
+    // plain scalar chain per output sample.
     let order = raw_coefficients.len();
-    let coefficients = {
-        let mut buf = [0i64; 12];
-        let mut i = 12 - order;
-        for c in raw_coefficients {
-            buf[i] = *c as i64;
-            i = i + 1;
+    let mut coefficients = [0i64; 12];
+    for j in 0..order {
+        coefficients[j] = raw_coefficients[j] as i64;
+    }
+    for i in order..buffer.len() {
+        let mut sum = 0i64;
+        for j in 0..order {
+            sum += coefficients[j] * buffer[i - order + j] as i64;
         }
-        buf
-    };
-
-    // The linear prediction is essentially an inner product of the known
-    // samples with the coefficients, followed by a shift. To be able to do an
-    // inner product of 12 elements at a time, we must first have 12 samples.
-    // If the predictor order is less, first predict the few samples after the
-    // warm-up samples.
-    let left = cmp::min(12, buffer.len()) - order;
-    for i in 0..left {
-        let prediction = raw_coefficients
-            .iter()
-            .zip(&buffer[i..order + i])
-            .map(|(&c, &s)| c as i64 * s as i64)
-            .sum::<i64>()
-            >> qlp_shift;
-        let delta = buffer[order + i] as i64;
-        buffer[order + i] = (prediction + delta) as i32;
+        buffer[i] = ((sum >> qlp_shift) + buffer[i] as i64) as i32;
     }
+}
 
-    if buffer.len() <= 12 {
-        return;
+/// The per-order LPC restore kernel.
+///
+/// A plain fully-unrolled inner product over the sliding window. Keeping the
+/// loop free of auxiliary arrays lets the optimizer hold the recent samples
+/// in registers across iterations; reloading them from memory makes each
+/// output wait on the store-to-load forward of the previous one, and that
+/// dependency was the dominant decode cost.
+fn predict_lpc_taps<const ORDER: usize>(
+    raw_coefficients: &[i16],
+    qlp_shift: i16,
+    buffer: &mut [i32],
+) {
+    let mut coefficients = [0i64; ORDER];
+    for j in 0..ORDER {
+        coefficients[j] = raw_coefficients[j] as i64;
     }
-
-    // At this point, buffer[0..12] has been predicted. For the rest of the
-    // buffer we can do inner products of 12 samples. This reduces the amount
-    // of conditional code, and improves performance significantly.
-    //
-    // A hand-written NEON version was measured at roughly twice this loop's
-    // cost on Apple M1 and reverted: the scalar loop keeps the twelve-sample
-    // window in registers, while a vector dot product must reload history
-    // that the previous iteration just stored. Keep this loop scalar.
-    for i in 12..buffer.len() {
-        let prediction = coefficients
-            .iter()
-            .zip(&buffer[i - 12..i])
-            .map(|(&c, &s)| c * s as i64)
-            .sum::<i64>()
-            >> qlp_shift;
-        let delta = buffer[i] as i64;
-        buffer[i] = (prediction + delta) as i32;
+    for i in ORDER..buffer.len() {
+        let mut sum = 0i64;
+        for j in 0..ORDER {
+            sum += coefficients[j] * buffer[i - ORDER + j] as i64;
+        }
+        buffer[i] = ((sum >> qlp_shift) + buffer[i] as i64) as i32;
     }
 }
 
