@@ -801,6 +801,16 @@ pub struct BitReader<'a> {
 
     /// The number of unconsumed bits in `cache`.
     bits_left: u32,
+
+    /// Bits that follow the unconsumed region of `cache`, also left-aligned.
+    ///
+    /// Refills first promote these into `cache` and only then touch the
+    /// slice, so a refill touches memory once per consumed window instead of
+    /// rebuilding its position every time.
+    ahead: u64,
+
+    /// The number of valid bits in `ahead`.
+    ahead_bits: u32,
 }
 
 /// Differential tracing support: records primitive bit-source ops so two
@@ -962,43 +972,110 @@ impl<'a> BitReader<'a> {
             pos: 0,
             cache: 0,
             bits_left: 0,
+            ahead: 0,
+            ahead_bits: 0,
         }
+    }
+
+    /// Loads the window of bytes that starts at `pos`.
+    ///
+    /// Returns the big-endian word with any partial tail zero-padded, the
+    /// number of valid bits it holds (at most 64), and how many whole bytes
+    /// were taken.
+    fn load_window(&self) -> (u64, u32, usize) {
+        let available = self.bytes.len() - self.pos;
+        if available == 0 {
+            return (0, 0, 0);
+        }
+        let whole = available.min(8);
+        let word = if whole == 8 {
+            // A single unaligned big-endian load; `whole` proved all eight
+            // bytes readable.
+            unsafe { u64::from_be((self.bytes.as_ptr().add(self.pos) as *const u64).read_unaligned()) }
+        } else {
+            let mut tail = [0_u8; 8];
+            tail[..whole].copy_from_slice(&self.bytes[self.pos..self.pos + whole]);
+            u64::from_be_bytes(tail)
+        };
+        (word, whole as u32 * 8, whole)
+    }
+
+    /// Appends fresh bytes to `ahead` once its bits moved into `cache`.
+    #[inline(always)]
+    fn refill_ahead(&mut self) {
+        if self.ahead_bits > 56 {
+            return;
+        }
+        let (word, valid, taken) = self.load_window();
+        if valid == 0 {
+            return;
+        }
+        if self.ahead_bits == 0 {
+            self.ahead = word;
+        } else {
+            let take = (64 - self.ahead_bits).min(valid);
+            self.ahead = (self.ahead << take) | (word >> (valid - take));
+            self.ahead_bits += take;
+        }
+        self.pos += taken;
     }
 
     /// Loads a fresh 64-bit window from the current bit position until the
     /// cache holds more than 56 bits or the input is exhausted.
     ///
-    /// The reload rebuilds the whole cache from the stream: consumed bits
-    /// below the unconsumed region are overwritten with the very bytes they
-    /// came from, so no stale data can survive. One unaligned 8-byte load
-    /// replaces per-byte assembly; only the final fragment of the input,
-    /// where fewer than eight bytes remain, goes through byte-wise padding.
+    /// Refills prefer promoting the look-ahead window into the cache; the
+    /// slice is touched only once per consumed window. One unaligned 8-byte
+    /// load replaces per-byte assembly; only the final fragment of the
+    /// input, where fewer than eight bytes remain, goes through byte-wise
+    /// padding.
     #[inline(always)]
     fn fill(&mut self) {
         if self.bits_left > 56 {
             return;
         }
-        let consumed_bits = self.pos * 8 - self.bits_left as usize;
-        let byte = (consumed_bits >> 3) as usize;
-        let shift = (consumed_bits & 7) as u32;
-        let available = self.bytes.len() - byte;
-        if available == 0 {
+        if self.ahead_bits > 0 {
+            // Append the look-ahead below the unconsumed region of `cache`,
+            // keeping one contiguous left-aligned run of unconsumed bits.
+            let take = (64 - self.bits_left).min(self.ahead_bits);
+            let incoming = if take == 64 {
+                self.ahead
+            } else {
+                self.ahead >> (64 - take)
+            };
+            self.cache = if self.bits_left == 0 {
+                incoming
+            } else {
+                (self.cache << take) | incoming
+            };
+            self.bits_left += take;
+            self.ahead = if take == 64 { 0 } else { self.ahead << take };
+            self.ahead_bits -= take;
+        }
+        if self.bits_left <= 56 {
+            // `ahead` is drained: rebuild the cache from the slice, as when
+            // the reader starts. This runs near the end of the input.
+            let consumed_bits = self.pos * 8 - self.bits_left as usize;
+            let byte = (consumed_bits >> 3) as usize;
+            let shift = (consumed_bits & 7) as u32;
+            let available = self.bytes.len() - byte;
+            if available == 0 {
+                return;
+            }
+            let word = if available >= 8 {
+                unsafe {
+                    u64::from_be((self.bytes.as_ptr().add(byte) as *const u64).read_unaligned())
+                }
+            } else {
+                let mut tail = [0_u8; 8];
+                tail[..available].copy_from_slice(&self.bytes[byte..]);
+                u64::from_be_bytes(tail)
+            };
+            self.cache = word << shift;
+            self.pos = byte + available.min(8);
+            self.bits_left = (available as u32 * 8 - shift).min(64 - shift);
             return;
         }
-        let word = if available >= 8 {
-            // A single unaligned big-endian load of the window. The bounds
-            // check above already proved all eight bytes are readable.
-            unsafe { u64::from_be((self.bytes.as_ptr().add(byte) as *const u64).read_unaligned()) }
-        } else {
-            let mut tail = [0_u8; 8];
-            tail[..available].copy_from_slice(&self.bytes[byte..]);
-            u64::from_be_bytes(tail)
-        };
-        self.cache = word << shift;
-        self.pos = byte + available.min(8);
-        // Past the loaded window the padded zeros are not real input, so the
-        // unconsumed count stops at the end of the actual bytes.
-        self.bits_left = (available as u32 * 8 - shift).min(64 - shift);
+        self.refill_ahead();
     }
 
     /// Consumes `bits` (at most 56) bits and returns them as the low-order
@@ -1025,13 +1102,13 @@ impl<'a> BitReader<'a> {
     /// Consumes trailing padding to the next byte boundary and reports how
     /// many whole bytes the consumed bits span, including that padding.
     pub fn finish_aligned(&mut self) -> io::Result<usize> {
-        let consumed_bits = self.pos * 8 - self.bits_left as usize;
+        let consumed_bits = self.pos * 8 - self.bits_left as usize - self.ahead_bits as usize;
         Ok((consumed_bits + 7) / 8)
     }
 
     /// Reports how many bits have been consumed from the slice so far.
     pub fn bits_consumed(&self) -> usize {
-        self.pos * 8 - self.bits_left as usize
+        self.pos * 8 - self.bits_left as usize - self.ahead_bits as usize
     }
 }
 
