@@ -717,6 +717,28 @@ pub trait BitSource {
         };
         Ok((q << rice_param) | r)
     }
+
+    /// Decodes a whole partition of Rice-coded unsigned values.
+    ///
+    /// Each value uses `param_bits` remainder bits and a unary quotient,
+    /// exactly as `read_rice_unsigned` defines, mapped through `map` before
+    /// it is stored. Implementations that can amortize work across symbols
+    /// override this; the default decodes one symbol at a time through
+    /// `read_rice_unsigned`.
+    fn decode_rice_partition_into<F>(
+        &mut self,
+        param_bits: u32,
+        buffer: &mut [i32],
+        mut map: F,
+    ) -> io::Result<()>
+    where
+        F: FnMut(u32) -> i32,
+    {
+        for sample in buffer.iter_mut() {
+            *sample = map(self.read_rice_unsigned(param_bits)?);
+        }
+        Ok(())
+    }
 }
 
 impl<R: ReadBytes> BitSource for Bitstream<R> {
@@ -1138,6 +1160,90 @@ impl BitSource for BitReader<'_> {
 
         // Slow path: the quotient run is long, or input ends nearby.
         read_rice_unsigned_default(self, rice_param)
+    }
+
+    fn decode_rice_partition_into<F>(
+        &mut self,
+        param_bits: u32,
+        buffer: &mut [i32],
+        mut map: F,
+    ) -> io::Result<()>
+    where
+        F: FnMut(u32) -> i32,
+    {
+        debug_assert!(param_bits < 31);
+
+        let mut i = 0;
+        while i < buffer.len() {
+            self.fill();
+            if self.bits_left == 0 {
+                return Err(eof_error());
+            }
+            // Zeros inside the unconsumed region; padding below it must not
+            // count toward a quotient.
+            let zeros = self.cache.leading_zeros().min(self.bits_left);
+            let symbol_bits = zeros + 1 + param_bits;
+
+            if symbol_bits <= self.bits_left {
+                // The whole symbol sits in one window: resolve quotient and
+                // remainder with shifts alone.
+                let rest = (self.cache << zeros) << 1;
+                let r = if param_bits > 0 {
+                    (rest >> (64 - param_bits)) as u32
+                } else {
+                    0
+                };
+                self.bits_left -= symbol_bits;
+                self.cache = if self.bits_left == 0 {
+                    0
+                } else {
+                    self.cache << symbol_bits
+                };
+                buffer[i] = map(((zeros as u32) << param_bits) | r);
+                i += 1;
+                continue;
+            }
+
+            // The zero run reaches past this window. Account for what is
+            // buffered, then scan fresh windows until a set bit appears.
+            let mut quotient = zeros;
+            self.cache = 0;
+            self.bits_left = 0;
+            loop {
+                self.fill();
+                if self.bits_left == 0 {
+                    return Err(eof_error());
+                }
+                let leading = self.cache.leading_zeros();
+                if leading < self.bits_left {
+                    quotient += leading;
+                    let take_bits = leading + 1;
+                    self.bits_left -= take_bits;
+                    self.cache = if self.bits_left == 0 {
+                        0
+                    } else {
+                        self.cache << take_bits
+                    };
+                    break;
+                }
+                quotient += self.bits_left;
+                self.cache = 0;
+                self.bits_left = 0;
+            }
+
+            // With the terminating bit consumed, only the remainder remains.
+            let remainder = if param_bits > 0 {
+                match self.try_read(param_bits) {
+                    Some(value) => value as u32,
+                    None => return Err(eof_error()),
+                }
+            } else {
+                0
+            };
+            buffer[i] = map(((quotient as u32) << param_bits) | remainder);
+            i += 1;
+        }
+        Ok(())
     }
 }
 

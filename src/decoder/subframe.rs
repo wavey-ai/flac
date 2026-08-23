@@ -319,23 +319,10 @@ fn decode_rice_partition<S: BitSource>(input: &mut S, buffer: &mut [i32]) -> Res
         return decode_unencoded_partition(input, buffer);
     }
 
-    // About the decoding below: the first part of the sample is the quotient,
-    // unary encoded. This means that there are q zeros, and then a one.
-    //
-    // The reference decoder supports sample widths up to 24 bits, so with
-    // the additional bytes for difference in channels and for prediction, a
-    // sample fits in 26 bits. The Rice parameter could be as little as 1,
-    // so the quotient can potentially be very large. However, in practice
-    // it is rarely greater than 5. Values as large as 75 still occur though.
-    //
     // The fused `read_rice_unsigned` resolves quotient and remainder from a
     // single cache window when possible, which is where nearly all decode
     // time used to go.
-    for sample in buffer.iter_mut() {
-        let val = (input.read_rice_unsigned(rice_param))?;
-        *sample = rice_to_signed(val);
-    }
-
+    input.decode_rice_partition_into(rice_param, buffer, rice_to_signed)?;
     Ok(())
 }
 
@@ -352,14 +339,10 @@ fn decode_rice2_partition<S: BitSource>(input: &mut S, buffer: &mut [i32]) -> Re
         return decode_unencoded_partition(input, buffer);
     }
 
-    // The fused `read_rice_unsigned` handles every remainder width, so no
+    // The fused partition decode handles every remainder width, so no
     // dispatch on the parameter is needed here. Rice2 is emitted by current
     // FFmpeg encoders for high-resolution input, so it is not a cold path.
-    for sample in buffer.iter_mut() {
-        let val = (input.read_rice_unsigned(rice_param))?;
-        *sample = rice_to_signed(val);
-    }
-
+    input.decode_rice_partition_into(rice_param, buffer, rice_to_signed)?;
     Ok(())
 }
 
