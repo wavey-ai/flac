@@ -8,7 +8,9 @@
 //! The `subframe` module deals with subframes that make up a frame of the FLAC stream.
 
 use super::error::{fmt_err, Error, Result};
-use super::input::{Bitstream, ReadBytes};
+use super::input::BitSource;
+#[cfg(test)]
+use super::input::Bitstream;
 use std::cmp;
 use std::num;
 
@@ -26,7 +28,7 @@ struct SubframeHeader {
     wasted_bits_per_sample: u32,
 }
 
-fn read_subframe_header<R: ReadBytes>(input: &mut Bitstream<R>) -> Result<SubframeHeader> {
+fn read_subframe_header<S: BitSource>(input: &mut S) -> Result<SubframeHeader> {
     // The first bit must be a 0 padding bit.
     if (input.read_bit())? {
         return fmt_err("invalid subframe header");
@@ -183,7 +185,7 @@ fn verify_rice_to_signed() {
 /// Decodes a subframe into the provided block-size buffer.
 ///
 /// It is assumed that the length of the buffer is the block size.
-pub fn decode<R: ReadBytes>(input: &mut Bitstream<R>, bps: u32, buffer: &mut [i32]) -> Result<()> {
+pub fn decode<S: BitSource>(input: &mut S, bps: u32, buffer: &mut [i32]) -> Result<()> {
     // The sample type i32 should be wide enough to accomodate for all bits of
     // the stream, but this can be verified at a higher level than here. Still,
     // it is a good idea to make the assumption explicit. FLAC supports up to
@@ -228,17 +230,13 @@ pub fn decode<R: ReadBytes>(input: &mut Bitstream<R>, bps: u32, buffer: &mut [i3
     Ok(())
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum RicePartitionType {
     Rice,
     Rice2,
 }
 
-fn decode_residual<R: ReadBytes>(
-    input: &mut Bitstream<R>,
-    block_size: u16,
-    buffer: &mut [i32],
-) -> Result<()> {
+fn decode_residual<S: BitSource>(input: &mut S, block_size: u16, buffer: &mut [i32]) -> Result<()> {
     // Residual starts with two bits of coding method.
     let partition_type = match (input.read_leq_u8(2))? {
         0b00 => RicePartitionType::Rice,
@@ -312,7 +310,7 @@ fn decode_residual<R: ReadBytes>(
 // partitions, not Rice2 partitions. Therefore it makes sense to inline this
 // function into decode_residual.
 #[inline(always)]
-fn decode_rice_partition<R: ReadBytes>(input: &mut Bitstream<R>, buffer: &mut [i32]) -> Result<()> {
+fn decode_rice_partition<S: BitSource>(input: &mut S, buffer: &mut [i32]) -> Result<()> {
     // A Rice partition (not Rice2), starts with a 4-bit Rice parameter.
     let rice_param = (input.read_leq_u8(4))? as u32;
 
@@ -330,24 +328,12 @@ fn decode_rice_partition<R: ReadBytes>(input: &mut Bitstream<R>, buffer: &mut [i
     // so the quotient can potentially be very large. However, in practice
     // it is rarely greater than 5. Values as large as 75 still occur though.
     //
-    // Next up is the remainder in rice_param bits. Depending on the number of
-    // bits, at most two or three bytes need to be read, so the code below is
-    // split into two cases to allow a more efficient reading function to be
-    // used when possible. About 45% of the time, rice_param is less than 9
-    // (measured from real-world FLAC files).
-
-    if rice_param <= 8 {
-        for sample in buffer.iter_mut() {
-            let q = (input.read_unary())?;
-            let r = (input.read_leq_u8(rice_param))? as u32;
-            *sample = rice_to_signed((q << rice_param) | r);
-        }
-    } else {
-        for sample in buffer.iter_mut() {
-            let q = (input.read_unary())?;
-            let r = (input.read_gt_u8_leq_u16(rice_param))?;
-            *sample = rice_to_signed((q << rice_param) | r);
-        }
+    // The fused `read_rice_unsigned` resolves quotient and remainder from a
+    // single cache window when possible, which is where nearly all decode
+    // time used to go.
+    for sample in buffer.iter_mut() {
+        let val = (input.read_rice_unsigned(rice_param))?;
+        *sample = rice_to_signed(val);
     }
 
     Ok(())
@@ -357,10 +343,7 @@ fn decode_rice_partition<R: ReadBytes>(input: &mut Bitstream<R>, buffer: &mut [i
 // not bloat the residual decoder. Rice2 was historically rare, but current
 // FFmpeg versions emit it for high-resolution input, so it is not a cold path.
 #[inline(never)]
-fn decode_rice2_partition<R: ReadBytes>(
-    input: &mut Bitstream<R>,
-    buffer: &mut [i32],
-) -> Result<()> {
+fn decode_rice2_partition<S: BitSource>(input: &mut S, buffer: &mut [i32]) -> Result<()> {
     // A Rice2 partition, starts with a 5-bit Rice parameter.
     let rice_param = (input.read_leq_u8(5))? as u32;
 
@@ -369,29 +352,12 @@ fn decode_rice2_partition<R: ReadBytes>(
         return decode_unencoded_partition(input, buffer);
     }
 
-    // Use the narrowest bit-reading primitive that can hold the remainder.
-    // Besides doing less work, this keeps the common <= 16-bit path free from
-    // the branches in the fully general u32 reader. Rice2 is emitted by
-    // current FFmpeg encoders for high-resolution input, so it is no longer
-    // safe to assume this path is irrelevant in practice.
-    if rice_param <= 8 {
-        for sample in buffer.iter_mut() {
-            let q = (input.read_unary())?;
-            let r = (input.read_leq_u8(rice_param))? as u32;
-            *sample = rice_to_signed((q << rice_param) | r);
-        }
-    } else if rice_param <= 16 {
-        for sample in buffer.iter_mut() {
-            let q = (input.read_unary())?;
-            let r = (input.read_gt_u8_leq_u16(rice_param))?;
-            *sample = rice_to_signed((q << rice_param) | r);
-        }
-    } else {
-        for sample in buffer.iter_mut() {
-            let q = (input.read_unary())?;
-            let r = (input.read_leq_u32(rice_param))?;
-            *sample = rice_to_signed((q << rice_param) | r);
-        }
+    // The fused `read_rice_unsigned` handles every remainder width, so no
+    // dispatch on the parameter is needed here. Rice2 is emitted by current
+    // FFmpeg encoders for high-resolution input, so it is not a cold path.
+    for sample in buffer.iter_mut() {
+        let val = (input.read_rice_unsigned(rice_param))?;
+        *sample = rice_to_signed(val);
     }
 
     Ok(())
@@ -399,10 +365,7 @@ fn decode_rice2_partition<R: ReadBytes>(
 
 /// Decode a Rice escape partition, whose residuals are stored directly as
 /// signed two's-complement integers of a shared width.
-fn decode_unencoded_partition<R: ReadBytes>(
-    input: &mut Bitstream<R>,
-    buffer: &mut [i32],
-) -> Result<()> {
+fn decode_unencoded_partition<S: BitSource>(input: &mut S, buffer: &mut [i32]) -> Result<()> {
     let raw_bits = input.read_leq_u8(5)? as u32;
     if raw_bits == 0 {
         buffer.fill(0);
@@ -511,11 +474,7 @@ fn verify_decode_rice2_partition_across_reader_widths() {
     }
 }
 
-fn decode_constant<R: ReadBytes>(
-    input: &mut Bitstream<R>,
-    bps: u32,
-    buffer: &mut [i32],
-) -> Result<()> {
+fn decode_constant<S: BitSource>(input: &mut S, bps: u32, buffer: &mut [i32]) -> Result<()> {
     let sample_u32 = (input.read_leq_u32(bps))?;
     let sample = extend_sign_u32(sample_u32, bps);
 
@@ -527,11 +486,7 @@ fn decode_constant<R: ReadBytes>(
 }
 
 #[cold]
-fn decode_verbatim<R: ReadBytes>(
-    input: &mut Bitstream<R>,
-    bps: u32,
-    buffer: &mut [i32],
-) -> Result<()> {
+fn decode_verbatim<S: BitSource>(input: &mut S, bps: u32, buffer: &mut [i32]) -> Result<()> {
     // This function must not be called for a sample wider than the sample type.
     // This has been verified at an earlier stage, but it is good to state the
     // assumption explicitly. FLAC supports up to 32-bit samples, so the
@@ -627,8 +582,8 @@ fn verify_predict_fixed() {
     assert_eq!(&buffer, &[21877, 27482, 26574]);
 }
 
-fn decode_fixed<R: ReadBytes>(
-    input: &mut Bitstream<R>,
+fn decode_fixed<S: BitSource>(
+    input: &mut S,
     bps: u32,
     order: u32,
     buffer: &mut [i32],
@@ -708,8 +663,13 @@ fn predict_lpc_low_order(raw_coefficients: &[i16], qlp_shift: i16, buffer: &mut 
     }
 
     // At this point, buffer[0..12] has been predicted. For the rest of the
-    // buffer we can do inner products of 12 samples. This reduces the amount of
-    // conditional code, and improves performance significantly.
+    // buffer we can do inner products of 12 samples. This reduces the amount
+    // of conditional code, and improves performance significantly.
+    //
+    // A hand-written NEON version was measured at roughly twice this loop's
+    // cost on Apple M1 and reverted: the scalar loop keeps the twelve-sample
+    // window in registers, while a vector dot product must reload history
+    // that the previous iteration just stored. Keep this loop scalar.
     for i in 12..buffer.len() {
         let prediction = coefficients
             .iter()
@@ -807,12 +767,7 @@ fn verify_predict_lpc() {
     );
 }
 
-fn decode_lpc<R: ReadBytes>(
-    input: &mut Bitstream<R>,
-    bps: u32,
-    order: u32,
-    buffer: &mut [i32],
-) -> Result<()> {
+fn decode_lpc<S: BitSource>(input: &mut S, bps: u32, order: u32, buffer: &mut [i32]) -> Result<()> {
     // The order minus one fits in 5 bits, so the order is at most 32.
     debug_assert!(order <= 32);
 

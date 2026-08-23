@@ -60,6 +60,8 @@ const CRC16_TABLE: [u16; 256] = [
 pub struct Crc8Reader<R: ReadBytes> {
     inner: R,
     state: u8,
+    /// When false, accumulation is skipped entirely; see `set_enabled`.
+    enabled: bool,
 }
 
 /// A reader that computes the CRC-16 over everything it reads.
@@ -68,6 +70,8 @@ pub struct Crc8Reader<R: ReadBytes> {
 pub struct Crc16Reader<R: ReadBytes> {
     inner: R,
     state: u16,
+    /// When false, accumulation is skipped entirely; see `set_enabled`.
+    enabled: bool,
 }
 
 impl<R: ReadBytes> Crc8Reader<R> {
@@ -76,6 +80,7 @@ impl<R: ReadBytes> Crc8Reader<R> {
         Crc8Reader {
             inner: inner,
             state: 0,
+            enabled: true,
         }
     }
 
@@ -84,10 +89,95 @@ impl<R: ReadBytes> Crc8Reader<R> {
         self.state
     }
 
+    /// Enables or disables checksum accumulation.
+    ///
+    /// With accumulation disabled, `crc()` no longer returns a meaningful
+    /// value and verification must be skipped as well. This exists for
+    /// callers that know the input bytes are already trusted, so that the
+    /// checksum work does not sit between every byte-level read.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
     #[inline(always)]
     fn update_state(&mut self, byte: u8) {
-        self.state = CRC8_TABLE[(self.state ^ byte) as usize];
+        if self.enabled {
+            self.state = CRC8_TABLE[(self.state ^ byte) as usize];
+        }
     }
+}
+
+/// Computes the FLAC CRC-8 over a byte range in a single pass.
+///
+/// The streaming decoder decodes frames straight from contiguous memory and
+/// verifies checksums afterwards over recorded ranges, so that checksum
+/// computation does not sit between every bit-level read.
+pub(crate) fn crc8_flac(data: &[u8]) -> u8 {
+    let mut state = 0_u8;
+    for &byte in data {
+        state = CRC8_TABLE[(state ^ byte) as usize];
+    }
+    state
+}
+
+/// Slicing-by-8 tables for the bulk CRC-16 pass.
+///
+/// FLAC's CRC-16 shifts bytes in most-significant-bit first, so within a
+/// block of eight bytes the first data byte carries weight `x^72` and each
+/// later position loses one `x^8`, down to `x^16` for the last byte. Column
+/// `CRC16_SLICE[k]` holds entries `b * x^(16 + 8*k) mod P`. The incoming
+/// register carries weight `x^64` across the whole block: its high byte
+/// lands on `x^72` and its low byte on `x^64`, exactly the weights of the
+/// first two data positions, which is why those two indices fold the
+/// register bytes in. Because the CRC is linear over GF(2), the CRC of a
+/// block is the XOR of eight entries, replacing the serial per-byte
+/// dependency chain with independent lookups. All eight columns together
+/// occupy 4 KiB, so they stay resident in L1 cache.
+static CRC16_SLICE: std::sync::OnceLock<[[u16; 256]; 8]> = std::sync::OnceLock::new();
+
+fn crc16_slice_tables() -> &'static [[u16; 256]; 8] {
+    CRC16_SLICE.get_or_init(|| {
+        let mut tables = [[0_u16; 256]; 8];
+        tables[0] = CRC16_TABLE;
+        // Each next column advances the previous column's CRC by one zero
+        // byte: append a zero to the sequence the entry encodes.
+        for k in 1..8 {
+            for b in 0..256_usize {
+                let prev = tables[k - 1][b];
+                tables[k][b] = (prev << 8) ^ CRC16_TABLE[((prev >> 8) as u8) as usize];
+            }
+        }
+        tables
+    })
+}
+
+/// Computes the FLAC CRC-16 over a byte range in a single pass.
+///
+/// The hot loop is a slicing-by-8 implementation: it consumes eight bytes
+/// per step through eight independent table lookups, which removes most of
+/// the serial dependency chain that limits the byte-at-a-time form. The
+/// tail falls back to the byte-at-a-time loop.
+pub(crate) fn crc16_flac(data: &[u8]) -> u16 {
+    let tables = crc16_slice_tables();
+    let mut state = 0_u16;
+    let mut chunks = data.chunks_exact(8);
+    for chunk in &mut chunks {
+        let block = u64::from_be_bytes(chunk.try_into().unwrap());
+        let hi = (state >> 8) as usize;
+        let lo = (state & 0xff) as usize;
+        state = tables[7][hi ^ ((block >> 56) & 0xff) as usize]
+            ^ tables[6][lo ^ ((block >> 48) & 0xff) as usize]
+            ^ tables[5][((block >> 40) & 0xff) as usize]
+            ^ tables[4][((block >> 32) & 0xff) as usize]
+            ^ tables[3][((block >> 24) & 0xff) as usize]
+            ^ tables[2][((block >> 16) & 0xff) as usize]
+            ^ tables[1][((block >> 8) & 0xff) as usize]
+            ^ tables[0][(block & 0xff) as usize];
+    }
+    for &byte in chunks.remainder() {
+        state = (state << 8) ^ CRC16_TABLE[((state >> 8) as u8 ^ byte) as usize];
+    }
+    state
 }
 
 impl<R: ReadBytes> Crc16Reader<R> {
@@ -96,6 +186,7 @@ impl<R: ReadBytes> Crc16Reader<R> {
         Crc16Reader {
             inner: inner,
             state: 0,
+            enabled: true,
         }
     }
 
@@ -104,9 +195,21 @@ impl<R: ReadBytes> Crc16Reader<R> {
         self.state
     }
 
+    /// Enables or disables checksum accumulation.
+    ///
+    /// With accumulation disabled, `crc()` no longer returns a meaningful
+    /// value and verification must be skipped as well. This exists for
+    /// callers that know the input bytes are already trusted, so that the
+    /// checksum work does not sit between every byte-level read.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
     #[inline(always)]
     fn update_state(&mut self, byte: u8) {
-        self.state = (self.state << 8) ^ CRC16_TABLE[((self.state >> 8) as u8 ^ byte) as usize];
+        if self.enabled {
+            self.state = (self.state << 8) ^ CRC16_TABLE[((self.state >> 8) as u8 ^ byte) as usize];
+        }
     }
 }
 
@@ -204,4 +307,71 @@ fn verify_crc16_test_vectors() {
     verify_crc16(vec![0x1f], 0x8041);
     verify_crc16(vec![0x04, 0x01], 0x1806);
     verify_crc16(vec![0x61, 0x62, 0x63], 0xcadb);
+}
+
+/// Reference implementation: the byte-at-a-time form of the FLAC CRC-16.
+#[cfg(test)]
+fn crc16_flac_scalar(data: &[u8]) -> u16 {
+    let mut state = 0_u16;
+    for &byte in data {
+        state = (state << 8) ^ CRC16_TABLE[((state >> 8) as u8 ^ byte) as usize];
+    }
+    state
+}
+
+#[test]
+fn crc16_flac_bulk_matches_scalar_on_known_vectors() {
+    assert_eq!(crc16_flac(&[0x1f]), 0x8041);
+    assert_eq!(crc16_flac(&[0x04, 0x01]), 0x1806);
+    assert_eq!(crc16_flac(b"abc"), 0xcadb);
+    // The frame header of a real stream exercises the seeded mid-block path.
+    let header: [u8; 12] = [
+        0xff, 0xf8, 0x69, 0x02, 0x00, 0x00, 0x0b, 0xa6, 0x01, 0x10, 0x50, 0x9c,
+    ];
+    assert_eq!(crc16_flac(&header), crc16_flac_scalar(&header));
+}
+
+/// Deterministic xorshift64* so the property test needs no dependencies.
+#[cfg(test)]
+struct Xorshift(u64);
+
+#[cfg(test)]
+impl Xorshift {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+}
+
+#[test]
+fn crc16_flac_bulk_matches_scalar_across_lengths() {
+    let mut rng = Xorshift(0x2545_f491_4f6c_dd1d);
+    let data: Vec<u8> = (0..4096).map(|_| rng.next() as u8).collect();
+    // Exercise the empty input, every tail length around the 8-byte block,
+    // and multi-block spans.
+    let lengths = [
+        0_usize, 1, 2, 7, 8, 9, 15, 16, 17, 63, 64, 65, 255, 1023, 4095, 4096,
+    ];
+    for &len in &lengths {
+        assert_eq!(
+            crc16_flac(&data[..len]),
+            crc16_flac_scalar(&data[..len]),
+            "mismatch at length {len}"
+        );
+    }
+    // Prefix-seeded equivalence: consuming a prefix then the rest must give
+    // the same value as consuming everything at once.
+    let whole = crc16_flac(&data);
+    let split = {
+        let mut state = crc16_flac(&data[..100]);
+        for &byte in &data[100..] {
+            state = (state << 8) ^ CRC16_TABLE[((state >> 8) as u8 ^ byte) as usize];
+        }
+        state
+    };
+    assert_eq!(whole, split);
 }

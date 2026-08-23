@@ -8,10 +8,11 @@
 //! The `frame` module deals with the frames that make up a FLAC stream.
 
 use std::i32;
+use std::io;
 
-use super::crc::{Crc16Reader, Crc8Reader};
+use super::crc::{crc16_flac, crc8_flac, Crc16Reader, Crc8Reader};
 use super::error::{fmt_err, Error, Result};
-use super::input::{Bitstream, ReadBytes};
+use super::input::{BitReader, Bitstream, ReadBytes};
 use super::subframe;
 
 #[derive(Clone, Copy)]
@@ -132,16 +133,55 @@ fn verify_read_var_length_int() {
     );
 }
 
-fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameHeader>> {
+fn read_frame_header_or_eof<R: ReadBytes>(
+    input: &mut R,
+    verify_checksums: bool,
+) -> Result<Option<FrameHeader>> {
     // The frame header includes a CRC-8 at the end. It can be computed
     // automatically while reading, by wrapping the input reader in a reader
     // that computes the CRC.
     let mut crc_input = Crc8Reader::new(input);
+    if !verify_checksums {
+        crc_input.set_enabled(false);
+    }
 
+    let Some(header) = read_frame_header_fields(&mut crc_input)? else {
+        return Ok(None);
+    };
+
+    // The checksum covers everything before the stored CRC-8 byte itself,
+    // so it must be taken before that last byte gets consumed.
+    let computed_crc = crc_input.crc();
+
+    // Next is an 8-bit CRC that is computed over the entire header so far.
+    let presumed_crc = (crc_input.read_u8())?;
+
+    // Do not verify checksum during fuzzing, otherwise malformed input from
+    // fuzzer won't reach the actually interesting code. Verification is also
+    // skipped when the caller opted out of checksums altogether.
+    #[cfg(not(fuzzing))]
+    {
+        if verify_checksums && computed_crc != presumed_crc {
+            return fmt_err("frame header CRC mismatch");
+        }
+    }
+
+    // Silence unused variable warnings.
+    #[cfg(fuzzing)]
+    let _ = computed_crc == presumed_crc;
+
+    Ok(Some(header))
+}
+
+/// Reads all frame header fields except the stored CRC-8 byte, without
+/// verifying anything. Returns `None` when the stream ended before the header
+/// even started. The caller verifies the CRC-8, computed over the bytes read
+/// so far, against the next byte.
+fn read_frame_header_fields<R: ReadBytes>(input: &mut R) -> Result<Option<FrameHeader>> {
     // First are 14 bits frame sync code, a reserved bit, and blocking stategy.
     // If instead of the two bytes we find the end of the stream, return
     // `Nothing`, indicating EOF.
-    let sync_res_block = match (crc_input.read_be_u16_or_eof())? {
+    let sync_res_block = match (input.read_be_u16_or_eof())? {
         None => return Ok(None),
         Some(x) => x,
     };
@@ -169,7 +209,7 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
     };
 
     // Next are 4 bits block size and 4 bits sample rate.
-    let bs_sr = (crc_input.read_u8())?;
+    let bs_sr = (input.read_u8())?;
     let mut block_size = 0u16;
     let mut read_8bit_bs = false;
     let mut read_16bit_bs = false;
@@ -215,7 +255,7 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
     }
 
     // Next are 4 bits channel assignment, 3 bits sample size, and 1 reserved bit.
-    let chan_bps_res = (crc_input.read_u8())?;
+    let chan_bps_res = (input.read_u8())?;
 
     // The most significant 4 bits determine channel assignment.
     let channel_assignment = match chan_bps_res >> 4 {
@@ -248,12 +288,12 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
     let block_time = match blocking_strategy {
         BlockingStrategy::Variable => {
             // The sample number is encoded in 8-56 bits, at most a 36-bit int.
-            let sample = (read_var_length_int(&mut crc_input))?;
+            let sample = (read_var_length_int(input))?;
             BlockTime::SampleNumber(sample)
         }
         BlockingStrategy::Fixed => {
             // The frame number is encoded in 8-48 bits, at most a 31-bit int.
-            let frame = (read_var_length_int(&mut crc_input))?;
+            let frame = (read_var_length_int(input))?;
             // A frame number larger than 31 bits is therefore invalid.
             if frame > 0x7fffffff {
                 return fmt_err("invalid frame header, frame number too large");
@@ -264,7 +304,7 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
 
     if read_8bit_bs {
         // 8 bit block size - 1 is stored.
-        let bs = (crc_input.read_u8())?;
+        let bs = (input.read_u8())?;
         block_size = bs as u16 + 1;
     }
     if read_16bit_bs {
@@ -272,7 +312,7 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
         // can be indicated in the streaminfo block is a 16-bit number, so a
         // value of 0xffff would be invalid because it exceeds the max block
         // size, though this is not mentioned explicitly in the specification.
-        let bs = (crc_input.read_be_u16())?;
+        let bs = (input.read_be_u16())?;
         if bs == 0xffff {
             return fmt_err("invalid block size, exceeds 65535");
         }
@@ -280,34 +320,17 @@ fn read_frame_header_or_eof<R: ReadBytes>(input: &mut R) -> Result<Option<FrameH
     }
 
     if read_8bit_sr {
-        let sr_khz = (crc_input.read_u8())?;
+        let sr_khz = (input.read_u8())?;
         sample_rate = Some(sr_khz as u32 * 1_000);
     }
     if read_16bit_sr {
-        let sr = (crc_input.read_be_u16())?;
+        let sr = (input.read_be_u16())?;
         sample_rate = Some(sr as u32);
     }
     if read_16bit_sr_ten {
-        let sr_ten = (crc_input.read_be_u16())?;
+        let sr_ten = (input.read_be_u16())?;
         sample_rate = Some(sr_ten as u32 * 10);
     }
-
-    // Next is an 8-bit CRC that is computed over the entire header so far.
-    let computed_crc = crc_input.crc();
-    let presumed_crc = (crc_input.read_u8())?;
-
-    // Do not verify checksum during fuzzing, otherwise malformed input from
-    // fuzzer won't reach the actually interesting code.
-    #[cfg(not(fuzzing))]
-    {
-        if computed_crc != presumed_crc {
-            return fmt_err("frame header CRC mismatch");
-        }
-    }
-
-    // Silence unused variable warnings.
-    #[cfg(fuzzing)]
-    let _ = computed_crc == presumed_crc;
 
     let frame_header = FrameHeader {
         block_time: block_time,
@@ -336,7 +359,9 @@ fn frame_header_8bit_sample_rate_is_in_khz() {
     bytes.push(crc);
 
     let mut reader = BufferedReader::new(io::Cursor::new(bytes));
-    let header = read_frame_header_or_eof(&mut reader).unwrap().unwrap();
+    let header = read_frame_header_or_eof(&mut reader, true)
+        .unwrap()
+        .unwrap();
     assert_eq!(header.sample_rate, Some(39_000));
 }
 
@@ -639,6 +664,9 @@ pub struct FrameReader<R: ReadBytes> {
     input: R,
     sample_rate: Option<u32>,
     bits_per_sample: Option<u32>,
+    /// When false, frame checksums are neither accumulated nor verified;
+    /// see `set_verify_checksums`.
+    verify_checksums: bool,
 }
 
 /// Either a `Block` or an `Error`.
@@ -717,6 +745,7 @@ impl<R: ReadBytes> FrameReader<R> {
             input: input,
             sample_rate: None,
             bits_per_sample: None,
+            verify_checksums: true,
         }
     }
 
@@ -727,6 +756,7 @@ impl<R: ReadBytes> FrameReader<R> {
             input,
             sample_rate: None,
             bits_per_sample: Some(bits_per_sample),
+            verify_checksums: true,
         }
     }
 
@@ -737,7 +767,19 @@ impl<R: ReadBytes> FrameReader<R> {
             input,
             sample_rate: Some(sample_rate),
             bits_per_sample: Some(bits_per_sample),
+            verify_checksums: true,
         }
+    }
+
+    /// Enables or disables frame checksum verification.
+    ///
+    /// By default, the CRC-8 over each frame header and the CRC-16 over each
+    /// complete frame are computed while reading and verified afterwards.
+    /// Disabling this skips that work entirely. Only do so for inputs whose
+    /// bytes are known to be intact already, such as frames that were decoded
+    /// from memory in the same process that encoded them.
+    pub fn set_verify_checksums(&mut self, enabled: bool) {
+        self.verify_checksums = enabled;
     }
 
     /// Decodes the next frame or returns an error if the data was invalid.
@@ -756,7 +798,10 @@ impl<R: ReadBytes> FrameReader<R> {
         // header (so not in the middle of the frame header), return `None`,
         // indicating EOF.
         let mut crc_input = Crc16Reader::new(&mut self.input);
-        let header = match (read_frame_header_or_eof(&mut crc_input))? {
+        if !self.verify_checksums {
+            crc_input.set_enabled(false);
+        }
+        let header = match (read_frame_header_or_eof(&mut crc_input, self.verify_checksums))? {
             None => return Ok(None),
             Some(h) => h,
         };
@@ -840,17 +885,14 @@ impl<R: ReadBytes> FrameReader<R> {
         let presumed_crc = (crc_input.read_be_u16())?;
 
         // Do not verify checksum during fuzzing, otherwise malformed input from
-        // the fuzzer won't reach the actually interesting code.
+        // the fuzzer won't reach the actually interesting code. Verification is
+        // also skipped when the caller opted out of checksums altogether.
         #[cfg(not(fuzzing))]
         {
-            if computed_crc != presumed_crc {
+            if self.verify_checksums && computed_crc != presumed_crc {
                 return fmt_err("frame CRC mismatch");
             }
         }
-
-        // Silence unused variable warnings.
-        #[cfg(fuzzing)]
-        let _ = computed_crc == presumed_crc;
 
         // TODO: constant block size should be verified if a frame number is
         // encountered.
@@ -872,3 +914,171 @@ impl<R: ReadBytes> FrameReader<R> {
 
 // TODO: implement Iterator<Item = FrameResult> for FrameReader, with an
 // accurate size hint.
+
+/// A byte-level reader over contiguous input that tracks how much it consumed.
+struct SliceBytes<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> SliceBytes<'a> {
+    fn new(data: &'a [u8]) -> SliceBytes<'a> {
+        SliceBytes { data, pos: 0 }
+    }
+}
+
+fn eof_io_error() -> io::Error {
+    io::Error::new(io::ErrorKind::UnexpectedEof, "Expected more bytes.")
+}
+
+impl ReadBytes for SliceBytes<'_> {
+    #[inline(always)]
+    fn read_u8(&mut self) -> io::Result<u8> {
+        match self.data.get(self.pos) {
+            Some(&byte) => {
+                self.pos += 1;
+                Ok(byte)
+            }
+            None => Err(eof_io_error()),
+        }
+    }
+
+    fn read_u8_or_eof(&mut self) -> io::Result<Option<u8>> {
+        match self.data.get(self.pos) {
+            Some(&byte) => {
+                self.pos += 1;
+                Ok(Some(byte))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn read_into(&mut self, buffer: &mut [u8]) -> io::Result<()> {
+        let end = self.pos + buffer.len();
+        let source = self.data.get(self.pos..end).ok_or_else(eof_io_error)?;
+        buffer.copy_from_slice(source);
+        self.pos = end;
+        Ok(())
+    }
+
+    fn skip(&mut self, amount: u32) -> io::Result<()> {
+        let end = self.pos + amount as usize;
+        if end > self.data.len() {
+            return Err(eof_io_error());
+        }
+        self.pos = end;
+        Ok(())
+    }
+}
+
+/// Decodes one FLAC frame straight from contiguous bytes.
+///
+/// This is the fast path of the incremental stream decoder: the compressed
+/// input is already in memory, so subframes decode through a slice-backed bit
+/// reader and both checksums verify afterwards over recorded byte ranges,
+/// instead of checksum work interleaving with every bit-level read.
+///
+/// Returns the decoded block together with the number of input bytes that the
+/// frame spans, or `Ok(None)` when the slice ends inside the frame so that
+/// the caller can supply more input later.
+pub(crate) fn decode_frame_slice(
+    bytes: &[u8],
+    stream_sample_rate: Option<u32>,
+    stream_bits_per_sample: Option<u32>,
+    buffer: Vec<i32>,
+    verify_checksums: bool,
+) -> Result<Option<(Block, usize)>> {
+    // Parse the header fields first, then read the stored CRC-8 byte. The
+    // checksum covers everything before that last byte.
+    let mut slice_input = SliceBytes::new(bytes);
+    let Some(header) = read_frame_header_fields(&mut slice_input)? else {
+        return Ok(None);
+    };
+    let presumed_crc8 = slice_input.read_u8()?;
+    let header_len = slice_input.pos;
+
+    #[cfg(not(fuzzing))]
+    if verify_checksums && crc8_flac(&bytes[..header_len - 1]) != presumed_crc8 {
+        return fmt_err("frame header CRC mismatch");
+    }
+    // Silence unused variable warnings.
+    #[cfg(fuzzing)]
+    let _ = presumed_crc8;
+
+    if let (Some(frame_rate), Some(stream_rate)) = (header.sample_rate, stream_sample_rate) {
+        if frame_rate != stream_rate {
+            return Err(Error::FormatError(
+                "frame sample rate conflicts with STREAMINFO",
+            ));
+        }
+    }
+
+    // We must allocate enough space for all channels in the block to be
+    // decoded, then resolve the sample width exactly like the streaming path.
+    let total_samples = header.channels() as usize * header.block_size as usize;
+    let mut buffer = ensure_buffer_len(buffer, total_samples);
+    let bps = resolve_bits_per_sample(header.bits_per_sample, stream_bits_per_sample)?;
+    debug_assert!(bps as usize <= 32);
+
+    let mut bits = BitReader::new(&bytes[header_len..]);
+    let bs = header.block_size as usize;
+
+    match header.channel_assignment {
+        ChannelAssignment::Independent(n_ch) => {
+            for ch in 0..n_ch as usize {
+                (subframe::decode(&mut bits, bps, &mut buffer[ch * bs..(ch + 1) * bs]))?;
+            }
+        }
+        ChannelAssignment::LeftSideStereo => {
+            // The side channel has one extra bit per sample.
+            (subframe::decode(&mut bits, bps, &mut buffer[..bs]))?;
+            (subframe::decode(&mut bits, bps + 1, &mut buffer[bs..bs * 2]))?;
+
+            // Then decode the side channel into the right channel.
+            decode_left_side(&mut buffer[..bs * 2]);
+        }
+        ChannelAssignment::RightSideStereo => {
+            // The side channel has one extra bit per sample.
+            (subframe::decode(&mut bits, bps + 1, &mut buffer[..bs]))?;
+            (subframe::decode(&mut bits, bps, &mut buffer[bs..bs * 2]))?;
+
+            // Then decode the side channel into the left channel.
+            decode_right_side(&mut buffer[..bs * 2]);
+        }
+        ChannelAssignment::MidSideStereo => {
+            // Decode mid as the first channel, then side with one
+            // extra bitp per sample.
+            (subframe::decode(&mut bits, bps, &mut buffer[..bs]))?;
+            (subframe::decode(&mut bits, bps + 1, &mut buffer[bs..bs * 2]))?;
+
+            // Then decode mid-side channel into left-right.
+            decode_mid_side(&mut buffer[..bs * 2]);
+        }
+    }
+
+    // The subframes pad out to a byte boundary before the footer; count those
+    // padding bits towards the frame like the streaming reader does.
+    let payload_len = bits.finish_aligned()?;
+    let consumed = header_len + payload_len;
+    let Some(footer) = bytes.get(consumed..consumed + 2) else {
+        return Ok(None);
+    };
+    let presumed_crc16 = u16::from_be_bytes([footer[0], footer[1]]);
+
+    #[cfg(not(fuzzing))]
+    if verify_checksums && crc16_flac(&bytes[..consumed]) != presumed_crc16 {
+        return fmt_err("frame CRC mismatch");
+    }
+    // Silence unused variable warnings.
+    #[cfg(fuzzing)]
+    let _ = presumed_crc16;
+
+    let time = match header.block_time {
+        BlockTime::FrameNumber(fnr) => header.block_size as u64 * fnr as u64,
+        BlockTime::SampleNumber(snr) => snr,
+    };
+
+    let block = Block::new(time, header.block_size as u32, buffer);
+
+    Ok(Some((block, consumed + 2)))
+}

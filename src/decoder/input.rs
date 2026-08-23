@@ -426,6 +426,7 @@ fn shift_right(x: u8, shift: u32) -> u8 {
 }
 
 /// Wraps a `Reader` to facilitate reading that is not byte-aligned.
+
 pub struct Bitstream<R: ReadBytes> {
     /// The source where bits are read from.
     reader: R,
@@ -433,6 +434,8 @@ pub struct Bitstream<R: ReadBytes> {
     data: u8,
     /// The number of bits of `data` that have not been consumed.
     bits_left: u32,
+    /// Total number of bytes pulled from the reader so far (diagnostics).
+    pulled: u64,
 }
 
 impl<R: ReadBytes> Bitstream<R> {
@@ -442,7 +445,13 @@ impl<R: ReadBytes> Bitstream<R> {
             reader: reader,
             data: 0,
             bits_left: 0,
+            pulled: 0,
         }
+    }
+
+    /// Diagnostics: reports how many bits have been consumed so far.
+    pub fn debug_bits_consumed(&self) -> u64 {
+        self.pulled * 8 - self.bits_left as u64
     }
 
     /// Generates a bitmask with 1s in the `bits` most significant bits.
@@ -461,6 +470,7 @@ impl<R: ReadBytes> Bitstream<R> {
     pub fn read_bit(&mut self) -> io::Result<bool> {
         // If no bits are left, we will need to read the next byte.
         let result = if self.bits_left == 0 {
+            self.pulled += 1;
             let fresh_byte = (self.reader.read_u8())?;
 
             // What remains later are the 7 least significant bits.
@@ -508,6 +518,7 @@ impl<R: ReadBytes> Bitstream<R> {
 
             // Continue reading bytes until we encounter a one.
             loop {
+                self.pulled += 1;
                 let fresh_byte = (self.reader.read_u8())?;
                 let zeros = fresh_byte.leading_zeros();
                 n = n + zeros;
@@ -536,6 +547,7 @@ impl<R: ReadBytes> Bitstream<R> {
             let msb = self.data;
 
             // Read a single byte.
+            self.pulled += 1;
             self.data = (self.reader.read_u8())?;
 
             // From the next byte, we take the additional bits that we need.
@@ -583,6 +595,7 @@ impl<R: ReadBytes> Bitstream<R> {
         // Continue reading the next bits, because no matter how many bits were
         // still left, there were less than 10.
         let bits_to_read = bits - self.bits_left;
+        self.pulled += 1;
         let fresh_byte = (self.reader.read_u8())? as u32;
         let lsb = if bits_to_read >= 8 {
             fresh_byte << (bits_to_read - 8)
@@ -600,6 +613,7 @@ impl<R: ReadBytes> Bitstream<R> {
             combined
         } else {
             // We need to read one more byte to get the final bits.
+            self.pulled += 1;
             let fresher_byte = (self.reader.read_u8())? as u32;
             let lsb = fresher_byte >> (16 - bits_to_read);
 
@@ -652,6 +666,468 @@ impl<R: ReadBytes> Bitstream<R> {
             let lsb = (self.read_leq_u16(bits - 16))? as u32;
             Ok((msb << (bits - 16)) | lsb)
         }
+    }
+}
+
+/// The bit-level read operations that FLAC subframe decoding needs.
+///
+/// [`Bitstream`] implements this for streaming readers, and [`BitReader`] for
+/// contiguous in-memory input. Decoding code stays generic over this trait, so
+/// each reader monomorphizes into its own specialized copy.
+pub trait BitSource {
+    /// Reads a single bit.
+    fn read_bit(&mut self) -> io::Result<bool>;
+
+    /// Reads bits until a 1 is read, and returns the number of zeros read.
+    fn read_unary(&mut self) -> io::Result<u32>;
+
+    /// Reads at most eight bits.
+    fn read_leq_u8(&mut self, bits: u32) -> io::Result<u8>;
+
+    /// Reads n bits, where 8 < n <= 16.
+    fn read_gt_u8_leq_u16(&mut self, bits: u32) -> io::Result<u32>;
+
+    /// Reads at most 16 bits.
+    fn read_leq_u16(&mut self, bits: u32) -> io::Result<u16>;
+
+    /// Reads at most 32 bits.
+    fn read_leq_u32(&mut self, bits: u32) -> io::Result<u32>;
+
+    /// Diagnostics hook: reports bits consumed when the implementation can
+    /// answer cheaply, otherwise `None`.
+    fn debug_bits_consumed(&self) -> Option<u64> {
+        None
+    }
+
+    /// Reads one Rice-coded unsigned value.
+    ///
+    /// The value is a unary-encoded quotient (a run of zeros terminated by a
+    /// one) followed by a `rice_param`-bit remainder, packed as
+    /// `(quotient << rice_param) | remainder`. Implementations with a wide
+    /// cache resolve most symbols from a single window; the default reads
+    /// both parts separately.
+    fn read_rice_unsigned(&mut self, rice_param: u32) -> io::Result<u32> {
+        let q = self.read_unary()?;
+        let r = if rice_param <= 8 {
+            (self.read_leq_u8(rice_param))? as u32
+        } else if rice_param <= 16 {
+            (self.read_gt_u8_leq_u16(rice_param))?
+        } else {
+            (self.read_leq_u32(rice_param))?
+        };
+        Ok((q << rice_param) | r)
+    }
+}
+
+impl<R: ReadBytes> BitSource for Bitstream<R> {
+    fn debug_bits_consumed(&self) -> Option<u64> {
+        Some(Bitstream::debug_bits_consumed(self))
+    }
+
+    #[inline(always)]
+    fn read_bit(&mut self) -> io::Result<bool> {
+        Bitstream::read_bit(self)
+    }
+
+    #[inline(always)]
+    fn read_unary(&mut self) -> io::Result<u32> {
+        Bitstream::read_unary(self)
+    }
+
+    #[inline(always)]
+    fn read_leq_u8(&mut self, bits: u32) -> io::Result<u8> {
+        Bitstream::read_leq_u8(self, bits)
+    }
+
+    #[inline(always)]
+    fn read_gt_u8_leq_u16(&mut self, bits: u32) -> io::Result<u32> {
+        Bitstream::read_gt_u8_leq_u16(self, bits)
+    }
+
+    #[inline(always)]
+    fn read_leq_u16(&mut self, bits: u32) -> io::Result<u16> {
+        Bitstream::read_leq_u16(self, bits)
+    }
+
+    #[inline(always)]
+    fn read_leq_u32(&mut self, bits: u32) -> io::Result<u32> {
+        Bitstream::read_leq_u32(self, bits)
+    }
+
+    // `read_rice_unsigned` is not overridden for the narrow streaming
+    // `Bitstream`: it has no wide cache to resolve a symbol from, so the
+    // default trait implementation over unary plus remainder reads is what
+    // it uses. The fused read lives on `BitReader`, which keeps a 64-bit
+    // cache over contiguous input.
+}
+
+/// A bit-level reader over contiguous input bytes.
+///
+/// This is the fast path used by the incremental stream decoder. It keeps a
+/// 64-bit cache so that most reads touch only registers, without per-byte
+/// calls through a byte-level reader. The next bit to consume is the most
+/// significant bit of the cache; bits below the unconsumed region are zero.
+pub struct BitReader<'a> {
+    /// The bytes to read from.
+    bytes: &'a [u8],
+
+    /// One past the index of the last byte loaded into the cache.
+    pos: usize,
+
+    /// Unconsumed bits, left-aligned; lower bits are always zero.
+    cache: u64,
+
+    /// The number of unconsumed bits in `cache`.
+    bits_left: u32,
+}
+
+/// Differential tracing support: records primitive bit-source ops so two
+/// reader implementations can be compared op-for-op on identical data.
+///
+/// Compiled only with the `decode-trace` feature; production builds carry
+/// none of this code.
+#[cfg(feature = "decode-trace")]
+#[doc(hidden)]
+pub mod op_trace {
+    #[derive(Clone, Copy, Debug)]
+    pub struct Op {
+        pub tag: u8,
+        pub width: u32,
+        pub value: u64,
+        pub pos_before: u64,
+    }
+
+    /// Collects ops when installed via [`install`]; otherwise records nothing.
+    use std::cell::RefCell;
+
+    thread_local! {
+        static OPS: RefCell<Vec<Op>> = const { RefCell::new(Vec::new()) };
+        static ACTIVE: RefCell<bool> = const { RefCell::new(false) };
+    }
+
+    pub fn install() {
+        OPS.with(|o| o.borrow_mut().clear());
+        ACTIVE.with(|a| *a.borrow_mut() = true);
+    }
+
+    pub fn uninstall() {
+        ACTIVE.with(|a| *a.borrow_mut() = false);
+    }
+
+    pub fn record(tag: u8, width: u32, value: u64, pos_before: u64) {
+        if !ACTIVE.with(|a| *a.borrow()) {
+            return;
+        }
+        OPS.with(|o| {
+            o.borrow_mut().push(Op {
+                tag,
+                width,
+                value,
+                pos_before,
+            })
+        });
+    }
+
+    pub fn take_all() -> Vec<Op> {
+        OPS.with(|o| std::mem::take(&mut *o.borrow_mut()))
+    }
+}
+
+/// Wraps any `BitSource`, forwarding reads while optionally logging each op.
+#[cfg(feature = "decode-trace")]
+pub struct Traced<'s, S: BitSource + ?Sized>(&'s mut S);
+
+#[cfg(feature = "decode-trace")]
+impl<S: BitSource + ?Sized> Traced<'_, S> {
+    /// Wraps `inner`, recording every forwarded op while tracing is on.
+    pub fn new(inner: &mut S) -> Traced<'_, S> {
+        Traced(inner)
+    }
+}
+
+#[cfg(feature = "decode-trace")]
+impl<S: BitSource + ?Sized> BitSource for Traced<'_, S> {
+    fn read_bit(&mut self) -> io::Result<bool> {
+        let pos = self.0.debug_bits_consumed().unwrap_or(0);
+        let v = self.0.read_bit()?;
+        op_trace::record(b'B', 1, v as u64, pos);
+        Ok(v)
+    }
+    fn read_unary(&mut self) -> io::Result<u32> {
+        let pos = self.0.debug_bits_consumed().unwrap_or(0);
+        let v = self.0.read_unary()?;
+        op_trace::record(b'U', 0, v as u64, pos);
+        Ok(v)
+    }
+    fn read_leq_u8(&mut self, bits: u32) -> io::Result<u8> {
+        let pos = self.0.debug_bits_consumed().unwrap_or(0);
+        let v = self.0.read_leq_u8(bits)?;
+        op_trace::record(b'L', bits, v as u64, pos);
+        Ok(v)
+    }
+    fn read_gt_u8_leq_u16(&mut self, bits: u32) -> io::Result<u32> {
+        let pos = self.0.debug_bits_consumed().unwrap_or(0);
+        let v = self.0.read_gt_u8_leq_u16(bits)?;
+        op_trace::record(b'G', bits, v as u64, pos);
+        Ok(v)
+    }
+    fn read_leq_u16(&mut self, bits: u32) -> io::Result<u16> {
+        let pos = self.0.debug_bits_consumed().unwrap_or(0);
+        let v = self.0.read_leq_u16(bits)?;
+        op_trace::record(b'S', bits, v as u64, pos);
+        Ok(v)
+    }
+    fn read_leq_u32(&mut self, bits: u32) -> io::Result<u32> {
+        let pos = self.0.debug_bits_consumed().unwrap_or(0);
+        let v = self.0.read_leq_u32(bits)?;
+        op_trace::record(b'W', bits, v as u64, pos);
+        Ok(v)
+    }
+    fn debug_bits_consumed(&self) -> Option<u64> {
+        self.0.debug_bits_consumed()
+    }
+}
+
+fn eof_error() -> io::Error {
+    io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected end of stream")
+}
+
+/// Resolved once per process so the per-symbol fast path never scans the
+/// environment.
+///
+/// The plain Rice read measures faster than the fused form on current
+/// Apple silicon under LLVM, so it is the default. Setting
+/// `WAVEY_FLAC_RICE_FUSED=1` selects the fused single-lookup read instead,
+/// mirroring FFmpeg's Golomb decoder; the knob exists so the comparison can
+/// be repeated as compilers and CPUs change.
+fn fused_rice_selected() -> bool {
+    use std::sync::OnceLock;
+    static FUSED: OnceLock<bool> = OnceLock::new();
+    *FUSED.get_or_init(|| std::env::var_os("WAVEY_FLAC_RICE_FUSED").is_some())
+}
+
+/// The default Rice read: unary quotient, then the remainder in one go.
+fn read_rice_unsigned_default<S: BitSource + ?Sized>(
+    source: &mut S,
+    rice_param: u32,
+) -> io::Result<u32> {
+    let q = (source.read_unary())?;
+    let r = if rice_param <= 8 {
+        ((source.read_leq_u8(rice_param))?) as u32
+    } else if rice_param <= 16 {
+        (source.read_gt_u8_leq_u16(rice_param))?
+    } else {
+        (source.read_leq_u32(rice_param))?
+    };
+    Ok((q << rice_param) | r)
+}
+
+impl<'a> BitReader<'a> {
+    /// Creates a bit reader over the provided bytes.
+    pub fn new(bytes: &'a [u8]) -> BitReader<'a> {
+        BitReader {
+            bytes,
+            pos: 0,
+            cache: 0,
+            bits_left: 0,
+        }
+    }
+
+    /// Loads a fresh 64-bit window from the current bit position until the
+    /// cache holds more than 56 bits or the input is exhausted.
+    ///
+    /// The reload rebuilds the whole cache from the stream: consumed bits
+    /// below the unconsumed region are overwritten with the very bytes they
+    /// came from, so no stale data can survive. One unaligned 8-byte load
+    /// replaces per-byte assembly; only the final fragment of the input,
+    /// where fewer than eight bytes remain, goes through byte-wise padding.
+    #[inline(always)]
+    fn fill(&mut self) {
+        if self.bits_left > 56 {
+            return;
+        }
+        let consumed_bits = self.pos * 8 - self.bits_left as usize;
+        let byte = (consumed_bits >> 3) as usize;
+        let shift = (consumed_bits & 7) as u32;
+        let available = self.bytes.len() - byte;
+        if available == 0 {
+            return;
+        }
+        let word = if available >= 8 {
+            // A single unaligned big-endian load of the window. The bounds
+            // check above already proved all eight bytes are readable.
+            unsafe { u64::from_be((self.bytes.as_ptr().add(byte) as *const u64).read_unaligned()) }
+        } else {
+            let mut tail = [0_u8; 8];
+            tail[..available].copy_from_slice(&self.bytes[byte..]);
+            u64::from_be_bytes(tail)
+        };
+        self.cache = word << shift;
+        self.pos = byte + available.min(8);
+        // Past the loaded window the padded zeros are not real input, so the
+        // unconsumed count stops at the end of the actual bytes.
+        self.bits_left = (available as u32 * 8 - shift).min(64 - shift);
+    }
+
+    /// Consumes `bits` (at most 56) bits and returns them as the low-order
+    /// bits of the value, or `None` when the input holds fewer bits.
+    #[inline(always)]
+    fn try_read(&mut self, bits: u32) -> Option<u64> {
+        if bits == 0 {
+            return Some(0);
+        }
+        if bits > self.bits_left {
+            self.fill();
+            if bits > self.bits_left {
+                return None;
+            }
+        }
+        // The unconsumed region starts at the top of the cache, so the top
+        // `bits` bits are exactly the requested ones. No mask needed.
+        let value = self.cache >> (64 - bits);
+        self.cache <<= bits;
+        self.bits_left -= bits;
+        Some(value)
+    }
+
+    /// Consumes trailing padding to the next byte boundary and reports how
+    /// many whole bytes the consumed bits span, including that padding.
+    pub fn finish_aligned(&mut self) -> io::Result<usize> {
+        let consumed_bits = self.pos * 8 - self.bits_left as usize;
+        Ok((consumed_bits + 7) / 8)
+    }
+
+    /// Reports how many bits have been consumed from the slice so far.
+    pub fn bits_consumed(&self) -> usize {
+        self.pos * 8 - self.bits_left as usize
+    }
+}
+
+impl BitSource for BitReader<'_> {
+    fn debug_bits_consumed(&self) -> Option<u64> {
+        Some(self.bits_consumed() as u64)
+    }
+
+    #[inline(always)]
+    fn read_bit(&mut self) -> io::Result<bool> {
+        match self.try_read(1) {
+            Some(value) => Ok(value != 0),
+            None => Err(eof_error()),
+        }
+    }
+
+    fn read_unary(&mut self) -> io::Result<u32> {
+        let mut zeros = 0;
+        loop {
+            if self.bits_left == 0 {
+                self.fill();
+                if self.bits_left == 0 {
+                    return Err(eof_error());
+                }
+            }
+            // The unconsumed region sits at the top of the cache. While it
+            // holds a set bit, leading_zeros counts only zeros inside the
+            // region; anything below the region is never inspected.
+            let leading = self.cache.leading_zeros();
+            if leading < self.bits_left {
+                // Consume the zero run plus its terminating one bit. When
+                // that empties the cache, assign zero outright: a shift by
+                // the full width would be masked in release builds and
+                // panic in debug builds, either of which resurrects the
+                // consumed bit as a ghost below the next refill.
+                let take_bits = leading + 1;
+                self.bits_left -= take_bits;
+                self.cache = if self.bits_left == 0 {
+                    0
+                } else {
+                    self.cache << take_bits
+                };
+                return Ok(zeros + leading);
+            }
+            // All remaining buffered bits are zero; account for them and
+            // continue with freshly loaded bytes.
+            zeros += self.bits_left;
+            self.cache = 0;
+            self.bits_left = 0;
+        }
+    }
+
+    #[inline(always)]
+    fn read_leq_u8(&mut self, bits: u32) -> io::Result<u8> {
+        debug_assert!(bits <= 8);
+        match self.try_read(bits) {
+            Some(value) => Ok(value as u8),
+            None => Err(eof_error()),
+        }
+    }
+
+    #[inline(always)]
+    fn read_gt_u8_leq_u16(&mut self, bits: u32) -> io::Result<u32> {
+        debug_assert!((8 < bits) && (bits <= 16));
+        match self.try_read(bits) {
+            Some(value) => Ok(value as u32),
+            None => Err(eof_error()),
+        }
+    }
+
+    #[inline(always)]
+    fn read_leq_u16(&mut self, bits: u32) -> io::Result<u16> {
+        debug_assert!(bits <= 16);
+        match self.try_read(bits) {
+            Some(value) => Ok(value as u16),
+            None => Err(eof_error()),
+        }
+    }
+
+    #[inline(always)]
+    fn read_leq_u32(&mut self, bits: u32) -> io::Result<u32> {
+        debug_assert!(bits <= 32);
+        match self.try_read(bits) {
+            Some(value) => Ok(value as u32),
+            None => Err(eof_error()),
+        }
+    }
+
+    #[inline(always)]
+    fn read_rice_unsigned(&mut self, rice_param: u32) -> io::Result<u32> {
+        debug_assert!(rice_param < 31);
+
+        if !fused_rice_selected() {
+            return read_rice_unsigned_default(self, rice_param);
+        }
+
+        self.fill();
+        // Zeros inside the unconsumed region. Bits below that region are
+        // zero as well but were never loaded, so clamp the count to what is
+        // actually buffered; padding must not count toward a quotient.
+        let zeros = self.cache.leading_zeros().min(self.bits_left);
+
+        // A complete symbol needs `zeros` zero bits, a terminating one, and
+        // `rice_param` remainder bits. When all of that sits in the cache,
+        // quotient and remainder resolve without touching the slice. This
+        // mirrors the fused Golomb read in FFmpeg's FLAC decoder.
+        if zeros + 1 + rice_param <= self.bits_left {
+            let rest = (self.cache << zeros) << 1;
+            let r = if rice_param > 0 {
+                (rest >> (64 - rice_param)) as u32
+            } else {
+                0
+            };
+            // Consume the whole symbol in one go, assigning zero outright
+            // when it empties the cache. A shift by the full width would be
+            // masked in release builds and panic in debug builds.
+            let symbol_bits = zeros + 1 + rice_param;
+            self.bits_left -= symbol_bits;
+            self.cache = if self.bits_left == 0 {
+                0
+            } else {
+                self.cache << symbol_bits
+            };
+            return Ok(((zeros as u32) << rice_param) | r);
+        }
+
+        // Slow path: the quotient run is long, or input ends nearby.
+        read_rice_unsigned_default(self, rice_param)
     }
 }
 
@@ -823,4 +1299,138 @@ fn verify_read_mixed() {
         bits.read_leq_u32(17).unwrap(),
         minus | (-08698_i16 as u16 as u32)
     );
+}
+
+#[test]
+fn bitreader_matches_bitstream_on_random_op_sequences() {
+    use std::io::Cursor;
+
+    // Deterministic xorshift so failures reproduce.
+    let mut seed: u64 = 0x1234_5678_9abc_def0;
+    let mut rng = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+
+    for _case in 0..2000 {
+        // Random byte payload; occasionally make long zero runs to exercise
+        // multi-byte unary quotients.
+        let len = (rng() % 64) as usize + 8;
+        let mut data: Vec<u8> = Vec::with_capacity(len);
+        let zero_run = rng() % 4 == 0;
+        for i in 0..len {
+            let byte = if zero_run && i < len / 2 {
+                0
+            } else {
+                rng() as u8
+            };
+            data.push(byte);
+        }
+
+        let mut streaming = Bitstream::new(BufferedReader::new(Cursor::new(data.clone())));
+        let mut slice = BitReader::new(&data);
+
+        let ops = (rng() % 40) as u32 + 10;
+        for _ in 0..ops {
+            let op = rng() % 6;
+            let bits = (rng() % 32 + 1) as u32;
+            match op {
+                0 => {
+                    let a = streaming.read_bit().ok().map(|b| b as u32);
+                    let b = slice.read_bit().ok().map(|b| b as u32);
+                    assert_eq!(a, b, "read_bit mismatch on data {data:?}");
+                    if a.is_none() {
+                        break;
+                    }
+                }
+                1 => {
+                    let w = bits % 9;
+                    let a = streaming.read_leq_u8(w).ok().map(|v| v as u32);
+                    let b = slice.read_leq_u8(w).ok().map(|v| v as u32);
+                    assert_eq!(a, b, "read_leq_u8({w}) mismatch on data {data:?}");
+                    if a.is_none() {
+                        break;
+                    }
+                }
+                2 => {
+                    let w = 9 + (rng() % 8) as u32;
+                    let a = streaming.read_gt_u8_leq_u16(w).ok();
+                    let b = slice.read_gt_u8_leq_u16(w).ok();
+                    assert_eq!(a, b, "read_gt_u8_leq_u16({w}) mismatch on data {data:?}");
+                    if a.is_none() {
+                        break;
+                    }
+                }
+                3 => {
+                    let a = streaming.read_unary().ok();
+                    let b = slice.read_unary().ok();
+                    assert_eq!(a, b, "read_unary mismatch on data {data:?}");
+                    if a.is_none() {
+                        break;
+                    }
+                }
+                4 => {
+                    let a = streaming.read_leq_u32(bits).ok();
+                    let b = slice.read_leq_u32(bits).ok();
+                    assert_eq!(a, b, "read_leq_u32({bits}) mismatch on data {data:?}");
+                    if a.is_none() {
+                        break;
+                    }
+                }
+                _ => {
+                    let k = (rng() % 31) as u32;
+                    let a = BitSource::read_rice_unsigned(&mut streaming, k).ok();
+                    let b = BitSource::read_rice_unsigned(&mut slice, k).ok();
+                    assert_eq!(a, b, "read_rice_unsigned({k}) mismatch on data {data:?}");
+                    if a.is_none() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn verify_unary_across_full_cache_refill_no_ghost_bits() {
+    // Regression pin for the ghost-bit corruption class.
+    //
+    // Historically, a unary symbol of exactly 64 bits (63 zeros plus its
+    // terminator) was consumed with `cache <<= 64`. Release builds mask that
+    // shift to a no-op, so the terminator survived below the unconsumed
+    // window, and a refill that merged bytes into the cache ORed fresh data
+    // on top of the surviving bit. Symbols parsed afterwards read one
+    // spurious 1.
+    //
+    // Two independent changes now prevent that corruption: the refill
+    // rebuilds the whole cache instead of merging into it, and every consume
+    // that empties the cache assigns zero instead of shifting by the full
+    // width (which also avoids the guaranteed panic in debug builds). The
+    // layout below pins that behavior: a 64-bit symbol, then a 56-bit symbol
+    // whose consume leaves 8 bits buffered, then a final refill of fewer
+    // than 8 bytes ahead of an 8-zero symbol.
+    let mut bits: Vec<bool> = Vec::new();
+    // Symbol 1: quotient 63, spanning the whole first cache window.
+    bits.extend(std::iter::repeat(false).take(63));
+    bits.push(true);
+    // Symbol 2: quotient 55, ending 8 bits short of a second full window.
+    bits.extend(std::iter::repeat(false).take(55));
+    bits.push(true);
+    // Symbol 3: quotient 8, whose zeros straddle the final refill.
+    bits.extend(std::iter::repeat(false).take(8));
+    bits.push(true);
+
+    let mut encoded = vec![0_u8; (bits.len() + 7) / 8];
+    for (index, &bit) in bits.iter().enumerate() {
+        if bit {
+            encoded[index / 8] |= 1 << (7 - index % 8);
+        }
+    }
+
+    let mut reader = BitReader::new(&encoded);
+    assert_eq!(reader.read_unary().unwrap(), 63);
+    assert_eq!(reader.read_unary().unwrap(), 55);
+    assert_eq!(reader.read_unary().unwrap(), 8);
 }

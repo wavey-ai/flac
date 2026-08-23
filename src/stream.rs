@@ -130,6 +130,15 @@ pub struct Decoder {
     pending_start: usize,
     stream_info: Option<StreamInfo>,
     state: StreamState,
+    /// Decode straight from contiguous buffered bytes. This is the default:
+    /// the slice-backed reader with bulk CRC verification measures faster
+    /// than the interleaved streaming reader and passes the formal corpus
+    /// gate. Set `WAVEY_FLAC_STREAMING_DECODE=1` to fall back to the older
+    /// interleaved path.
+    slice_decode: bool,
+    /// When false, frame checksums are neither accumulated nor verified;
+    /// see `set_verify_checksums`.
+    verify_checksums: bool,
 }
 
 impl Default for Decoder {
@@ -149,7 +158,24 @@ impl Decoder {
             pending_start: 0,
             stream_info: None,
             state: StreamState::Magic,
+            // The slice path decodes each buffered frame in place and then
+            // verifies its CRC-16 in one pass, which is faster than
+            // interleaving checksum accumulation with bit reads. Opt back
+            // into the streaming reader with WAVEY_FLAC_STREAMING_DECODE.
+            slice_decode: std::env::var_os("WAVEY_FLAC_STREAMING_DECODE").is_none(),
+            verify_checksums: true,
         }
+    }
+
+    /// Enables or disables frame checksum verification.
+    ///
+    /// By default, checksums are computed and verified while decoding.
+    /// Disabling this skips that work, which makes decoding measurably
+    /// faster. Only disable verification for streams whose bytes are known
+    /// to be intact already, for example frames produced by the encoder in
+    /// the same process.
+    pub fn set_verify_checksums(&mut self, enabled: bool) {
+        self.verify_checksums = enabled;
     }
 
     /// Returns parsed `STREAMINFO` once it has arrived.
@@ -421,12 +447,43 @@ impl Decoder {
             FlacFrameError::Decode("FLAC stream has no STREAMINFO block".to_string())
         })?;
         let frame_buffer = std::mem::take(&mut self.frame_buffer);
+
+        if self.slice_decode {
+            let decoded = crate::decoder::frame::decode_frame_slice(
+                self.available_input(),
+                Some(stream_info.sample_rate),
+                Some(stream_info.bits_per_sample),
+                frame_buffer,
+                self.verify_checksums,
+            );
+            return match decoded {
+                Ok(Some((block, consumed))) => {
+                    if consumed == 0 || consumed > self.buffered_bytes() {
+                        return Err(FlacFrameError::Decode(
+                            "FLAC decoder reported an invalid consumed range".to_string(),
+                        ));
+                    }
+                    self.validate_frame(block, &stream_info, consumed)
+                }
+                Ok(None) => Ok(None),
+                Err(DecodeError::IoError(error))
+                    if error.kind() == io::ErrorKind::UnexpectedEof =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(FlacFrameError::Decode(error.to_string())),
+            };
+        }
+
         let cursor = Cursor::new(self.available_input());
         let mut reader = FrameReader::with_stream_info(
             cursor,
             stream_info.sample_rate,
             stream_info.bits_per_sample,
         );
+        if !self.verify_checksums {
+            reader.set_verify_checksums(false);
+        }
         let block = match reader.read_next_or_eof(frame_buffer) {
             Ok(Some(block)) => block,
             Ok(None) => return Ok(None),
@@ -436,11 +493,23 @@ impl Decoder {
             Err(error) => return Err(FlacFrameError::Decode(error.to_string())),
         };
         let consumed = reader.into_inner().position() as usize;
+
         if consumed == 0 || consumed > self.buffered_bytes() {
             return Err(FlacFrameError::Decode(
                 "FLAC decoder reported an invalid consumed range".to_string(),
             ));
         }
+        self.validate_frame(block, &stream_info, consumed)
+    }
+
+    /// Checks a decoded frame against the stream's declared format, then
+    /// retires the bytes the frame spanned.
+    fn validate_frame(
+        &mut self,
+        block: Block,
+        stream_info: &StreamInfo,
+        consumed: usize,
+    ) -> Result<Option<Block>, FlacFrameError> {
         if block.channels() != stream_info.channels {
             return Err(FlacFrameError::FormatMismatch(format!(
                 "decoded frame contains {} channels, STREAMINFO declares {}",
@@ -557,6 +626,34 @@ mod tests {
         assert_eq!(decoder.stream_info().unwrap().channels, 2);
         assert_eq!(decoded, samples);
         decoder.finish().unwrap();
+    }
+
+    #[test]
+    fn decode_without_checksum_verification_matches_verified_output() {
+        let (config, samples) = fixture();
+        let file = encode_file(config, &samples);
+
+        let decode_all = |verify: bool| -> Vec<i32> {
+            let mut decoder = Decoder::new();
+            decoder.set_verify_checksums(verify);
+            let mut decoded = Vec::new();
+            let mut scratch = [0_i32; 13];
+            for chunk in file.chunks(11) {
+                let written = decoder.decode_i32(chunk, &mut scratch).unwrap();
+                decoded.extend_from_slice(&scratch[..written]);
+                loop {
+                    let written = decoder.decode_i32(&[], &mut scratch).unwrap();
+                    if written == 0 {
+                        break;
+                    }
+                    decoded.extend_from_slice(&scratch[..written]);
+                }
+            }
+            decoded
+        };
+
+        assert_eq!(decode_all(true), samples);
+        assert_eq!(decode_all(false), samples);
     }
 
     #[test]

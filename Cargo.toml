@@ -31,6 +31,7 @@ debug = 1
 default = ["log", "par", "serde"]
 
 __export_sigen = ["dep:rand"]
+decode-trace = []
 decode = ["dep:nom"]
 experimental = ["dep:nalgebra"]
 log = ["dep:log"]
@@ -66,3 +67,7 @@ walkdir = "2"
 
 [build-dependencies]
 built = "0.7.7"
+
+[[example]]
+name = "replay_diff"
+required-features = ["decode-trace"]
