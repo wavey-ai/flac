@@ -92,11 +92,81 @@ Suggested next pass:
    both balanced and maximum profiles. Compare matched block sizes separately
    from production defaults; FFmpeg used 4,608 samples while Wavey used 4,096
    in the recorded baseline.
-4. Keep improvements in `wavey-ai/claxon` or `wavey-ai/flacenc-rs` first so
-   they remain suitable for contribution upstream, then integrate them here.
-5. Reject complexity that only helps Westside or one predictor/Rice
+ 4. Keep improvements in `wavey-ai/claxon` or `wavey-ai/flacenc-rs` first so
+    they remain suitable for contribution upstream, then integrate them here.
+    Port status for the slice-reader round: the bulk slicing-by-eight CRC-16
+    now exists in `wavey-ai/claxon` as the public `crc16_flac` with vector and
+    reader-equivalence tests. The other changes are specific to the slice
+    decode path and have no upstream counterpart yet: the full-window
+    BitReader refill, the ghost-bit consume guards, and the Rice selection
+    knob all depend on the 64-bit cache reader that upstream does not have.
+    They stay here until an upstream design adopts a cached bit reader or a
+    post-hoc frame checksum.
+ 5. Reject complexity that only helps Westside or one predictor/Rice
    distribution. Several such ideas were already measured and reverted during
    the first pass.
+
+#### Slice-reader result (updated 2026-08-23)
+
+Slice decoding is now the production path. Set `WAVEY_FLAC_STREAMING_DECODE=1`
+to select the older streaming reader as an escape hatch.
+
+The 2026-08-22 entry recorded three defects on this path. All three are fixed:
+
+1. A release-mode shift bug corrupted one bit when a unary symbol spanned the
+   full 64-bit cache window. Rust masks such shifts to a no-op in release
+   builds, so one consumed bit survived below the unconsumed region. The next
+   cache fill then mixed it into fresh data. Both consume sites now assign
+   zero instead of shifting by the full width. The regression test
+   `verify_unary_across_full_cache_refill_no_ghost_bits` covers this case.
+2. The invalid subframe header came from the same ghost-bit corruption class
+   and no longer reproduces.
+3. The frame CRC mismatch had the same root cause.
+
+Three further changes made the path faster than streaming. The environment
+scan for the Rice knob moved into a once-per-process lookup. The bulk CRC-16
+now uses slicing-by-8 with eight 256-entry columns. The slice reader refills
+with one unaligned 8-byte load instead of a variable-length copy.
+
+The plain Rice read measures faster than the fused port on Apple silicon, so
+it is the default. Set `WAVEY_FLAC_RICE_FUSED=1` to select the fused
+single-lookup form for comparison.
+
+Benchmark matrix on the SoundKit CPU host `yl-encodec-1` (Intel Xeon
+Platinum 8581C, 4 vCPU, Debian 12, rustc 1.97.1, libFLAC 1.4.2, idle load).
+Each cell is a median-of-medians over three alternating rounds of seven
+timed runs; checksums stay enabled. The slice path beats streaming on every
+fixture. The gap to libFLAC stays between 1.6x and 2.5x:
+
+```text
+fixture              slice   stream  libflac   slice/libflac
+blocksize 4608       0.0092  0.0100  0.0037    2.49
+blocksize 512        0.0093  0.0101  0.0038    2.45
+variable blocksize   0.0344  0.0358  0.0159    2.16
+high resolution      0.0271  0.0286  0.0109    2.49
+samplerate 384kHz    0.0989  0.1069  0.0427    2.32
+mono audio (short)   0.0008  0.0009  0.0005    1.60
+ffmpeg-level-5       0.2991  0.3272  0.1288    2.32
+wavey-balanced       0.1874  0.2179  0.1137    1.65
+wavey-maximum        0.2985  0.3260  0.1393    2.14
+```
+
+Tools: `examples/codec_bench.rs` for the Rust paths,
+`scripts/libflac_bench.c` against system libFLAC, and
+`scripts/bench_interleaved.py` plus the matrix driver used on the host for
+alternating runs.
+
+Retain `examples/codec_bench.rs`, `examples/decode_path_ab.rs`,
+`examples/diff_stream_vs_flacreader.rs`, `examples/replay_diff.rs`, and the
+`op_trace` module. They are the measurement and correctness tools for the
+next decoder pass.
+
+A hand-written NEON dot product for `predict_lpc_low_order` was also measured
+and reverted. Both a single-accumulator and a three-accumulator version ran
+about twice as slow as the scalar loop on Apple M1. The scalar loop keeps the
+twelve-sample window in registers. A vector version must reload history that
+the previous iteration just stored, and the store-forwarding stalls cost more
+than the vector multiplies save.
 
 ### 2. Add decoder MD5 and total-sample verification
 
